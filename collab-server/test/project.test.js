@@ -98,3 +98,28 @@ test('deleted and unknown projects are reported as missing', async () => {
 	assert.strictEqual(lastProject(unknown), null);
 	[a, unknown].forEach((c) => c.ws.close());
 });
+
+test('deleted diagrams are listed in trash and can be restored', () => {
+	const p = ProjectState.create('p1', 'P');
+	const { reply } = p.handle({ t: 'add', name: 'Orders' });
+	p.handle({ t: 'add', name: 'Users' });
+	p.handle({ t: 'remove', id: reply.id });
+	assert.deepStrictEqual(p.view().trash.map((d) => d.name), ['Orders']);
+	assert.ok(p.view().trash[0].deletedAt > 0);
+	const restored = p.handle({ t: 'restore', id: reply.id });
+	assert.deepStrictEqual(restored.reply, { t: 'restored', id: reply.id });
+	assert.deepStrictEqual(names(p), ['Diagram 1', 'Users', 'Orders'], 'restored diagrams come back at the end');
+	assert.deepStrictEqual(p.view().trash, []);
+});
+
+test('deleted projects are listed separately and can be restored', async () => {
+	const created = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'Old' }) })).json();
+	await fetch(`${BASE}/api/projects/${created.id}`, { method: 'DELETE' });
+	let deleted = await (await fetch(`${BASE}/api/projects?deleted=1`)).json();
+	assert.ok(deleted.some((p) => p.id === created.id && p.deletedAt > 0));
+	await fetch(`${BASE}/api/projects/${created.id}/restore`, { method: 'POST' });
+	deleted = await (await fetch(`${BASE}/api/projects?deleted=1`)).json();
+	const listed = await (await fetch(`${BASE}/api/projects`)).json();
+	assert.ok(!deleted.some((p) => p.id === created.id));
+	assert.ok(listed.some((p) => p.id === created.id));
+});

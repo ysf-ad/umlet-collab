@@ -60,6 +60,7 @@
 					<g:HTML><hr/></g:HTML>
 					<g:HTML styleName="{style.menuItem}" ui:field="importMenuItem" text="File Import" title="import diagram from uxf file" />
 					<g:HTML styleName="{style.menuItem}" ui:field="exportMenuItem" text="File Export" title="export diagram to uxf or as image" />
+					<g:FlowPanel ui:field="storageMenuPanel"><!-- dropbox and browser storage, hidden by the collaborative web version -->
 					<g:HTML><hr/></g:HTML>
 					<g:HTML>
 						<script type="text/javascript" id="dropboxjs" data-app-key="3mmyizdvtldctng"></script>
@@ -74,6 +75,7 @@
 					<g:HTML><hr/></g:HTML>
 					<g:HTML styleName="{style.menuItem}" ui:field="saveMenuItem" text="Save" title="save diagram to browser storage" />
 					<g:FlowPanel ui:field="restoreMenuPanel" />
+					</g:FlowPanel>
 				</g:FlowPanel>
 			</g:west>
 			<g:center>

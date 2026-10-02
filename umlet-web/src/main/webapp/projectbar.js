@@ -2,7 +2,8 @@
 //
 // A project is a list of diagrams; each diagram is its own collaborative room "<projectId>/<diagramId>".
 // The bar shows one tab per diagram, live for everyone in the project: add (+), rename (double click),
-// delete (x), reorder (drag). Switching tabs swaps the room in place via umletCollab.switchRoom().
+// delete (x), reorder (drag), restore deleted diagrams (Deleted menu). Switching tabs swaps the room in place
+// via umletCollab.switchRoom().
 // Server side: Project Durable Object (collab-server/src/worker.js) / Node relay, logic in src/project.js.
 (function () {
 	var params = new URLSearchParams(location.search);
@@ -18,6 +19,7 @@
 	var requestCounter = 0;
 	var pendingAdd = null;  // requestId of the diagram we created, to switch to it
 	var pendingRename = null; // id of the diagram we created: rename it inline as soon as its tab exists
+	var pendingSwitch = null; // id of a diagram we restored: switch to it as soon as its tab exists
 
 	// ---- DOM ------------------------------------------------------------------------
 	var bar = document.createElement('div');
@@ -28,6 +30,7 @@
 		'<div class="pb-tabs" role="tablist"></div>' +
 		'<button class="pb-add" title="New diagram" aria-label="New diagram">+</button>' +
 		'<div class="pb-spacer"></div>' +
+		'<button class="pb-trash" title="Restore deleted diagrams" aria-haspopup="true" aria-expanded="false" hidden></button>' +
 		'<span class="pb-status"></span>' +
 		'<button class="pb-me" title="Change your display name"></button>' +
 		'<button class="pb-share" title="Copy a link to this diagram">Copy link</button>';
@@ -35,12 +38,17 @@
 	var projectEl = bar.querySelector('.pb-project');
 	var statusEl = bar.querySelector('.pb-status');
 	var meEl = bar.querySelector('.pb-me');
+	var trashEl = bar.querySelector('.pb-trash');
+	var trashMenu = document.createElement('div');
+	trashMenu.id = 'pb-trash-menu';
+	trashMenu.hidden = true;
 	var toast = document.createElement('div');
 	toast.id = 'pb-toast';
 
 	function mount() {
 		document.body.appendChild(bar);
 		document.body.appendChild(toast);
+		document.body.appendChild(trashMenu);
 		var dark = typeof theme !== 'undefined' && theme === 'DARK'; // set by the host page
 		document.body.classList.add('has-projectbar', dark ? 'pb-dark' : 'pb-light');
 		window.dispatchEvent(new Event('resize')); // GWT re-lays out below the bar
@@ -82,6 +90,10 @@
 				pendingRename = msg.id;
 				if (project && project.diagrams.some(function (d) { return d.id === msg.id; })) onProject(project);
 			}
+			else if (msg.t === 'restored') {
+				pendingSwitch = msg.id;
+				if (project) onProject(project);
+			}
 			else if (msg.t === 'error') showToast(msg.message);
 			else if (msg.t === 'deleted') onProject(null);
 		};
@@ -100,6 +112,15 @@
 		var previous = project;
 		project = p;
 		projectEl.textContent = p.name;
+		document.body.classList.remove('pb-missing'); // the project may have been restored
+		var missing = document.getElementById('pb-missing');
+		if (missing) missing.remove();
+		renderTrash();
+		if (pendingSwitch && p.diagrams.some(function (d) { return d.id === pendingSwitch; })) {
+			var restored = pendingSwitch;
+			pendingSwitch = null;
+			if (restored !== current) { switchTo(restored, true); return; }
+		}
 		if (pendingRename && p.diagrams.some(function (d) { return d.id === pendingRename; })) {
 			current = null; // switch to the new diagram below
 		}
@@ -219,6 +240,68 @@
 		if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}
 
+	function ago(time) {
+		var m = Math.round((Date.now() - time) / 60000);
+		if (m < 1) return 'just now';
+		if (m < 60) return m + ' min ago';
+		if (m < 60 * 24) return Math.round(m / 60) + ' h ago';
+		return Math.round(m / 60 / 24) + ' days ago';
+	}
+
+	// "Deleted (n)" menu: deleted diagrams keep their content and can be restored by anyone
+	function renderTrash() {
+		var trash = (project && project.trash) || [];
+		trashEl.hidden = trash.length === 0;
+		trashEl.textContent = 'Deleted (' + trash.length + ')';
+		if (!trash.length) closeTrash();
+		trashMenu.innerHTML = '';
+		trash.forEach(function (d) {
+			var row = document.createElement('div');
+			row.className = 'pb-trash-row';
+			var label = document.createElement('div');
+			label.className = 'pb-trash-label';
+			var name = document.createElement('div');
+			name.textContent = d.name;
+			var when = document.createElement('div');
+			when.className = 'pb-trash-when';
+			when.textContent = d.deletedAt ? 'deleted ' + ago(d.deletedAt) : 'deleted';
+			label.appendChild(name);
+			label.appendChild(when);
+			var button = document.createElement('button');
+			button.textContent = 'Restore';
+			button.setAttribute('aria-label', 'Restore ' + d.name);
+			button.addEventListener('click', function () {
+				send({ t: 'restore', id: d.id });
+				closeTrash();
+			});
+			row.appendChild(label);
+			row.appendChild(button);
+			trashMenu.appendChild(row);
+		});
+	}
+
+	function openTrash() {
+		var r = trashEl.getBoundingClientRect();
+		trashMenu.style.top = (r.bottom + 4) + 'px';
+		trashMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+		trashMenu.hidden = false;
+		trashEl.setAttribute('aria-expanded', 'true');
+	}
+
+	function closeTrash() {
+		trashMenu.hidden = true;
+		trashEl.setAttribute('aria-expanded', 'false');
+	}
+
+	trashEl.addEventListener('click', function (e) {
+		e.stopPropagation();
+		if (trashMenu.hidden) { renderTrash(); openTrash(); } else closeTrash();
+	});
+	document.addEventListener('mousedown', function (e) {
+		if (!trashMenu.hidden && !trashMenu.contains(e.target) && e.target !== trashEl) closeTrash();
+	}, true);
+	document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeTrash(); });
+
 	function renderMe() {
 		meEl.innerHTML = '';
 		var dot = document.createElement('span');
@@ -312,7 +395,17 @@
 		'#projectbar .pb-add:hover,#projectbar .pb-me:hover,#projectbar .pb-share:hover{background:var(--pb-tab);color:var(--pb-fg)}',
 		'#projectbar .pb-spacer{flex:1}',
 		'#projectbar .pb-status{align-self:center;color:var(--pb-muted)}',
-		'#projectbar .pb-me,#projectbar .pb-share{align-self:center;padding:4px 8px;border-radius:6px;white-space:nowrap}',
+		'#projectbar .pb-me,#projectbar .pb-share,#projectbar .pb-trash{align-self:center;padding:4px 8px;border-radius:6px;white-space:nowrap}',
+		'#projectbar .pb-trash{color:var(--pb-muted)}',
+		'#projectbar .pb-trash:hover{background:var(--pb-tab);color:var(--pb-fg)}',
+		'#projectbar .pb-trash[hidden]{display:none}',
+		'#pb-trash-menu{position:fixed;min-width:240px;max-width:340px;max-height:60vh;overflow-y:auto;background:var(--pb-active);color:var(--pb-fg);border:1px solid var(--pb-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px;font:13px system-ui,sans-serif;z-index:1002}',
+		'#pb-trash-menu[hidden]{display:none}',
+		'.pb-trash-row{display:flex;align-items:center;gap:12px;padding:6px 8px;border-radius:6px}',
+		'.pb-trash-row:hover{background:var(--pb-bg)}',
+		'.pb-trash-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+		'.pb-trash-when{color:var(--pb-muted);font-size:12px}',
+		'.pb-trash-row button{font:inherit;color:var(--pb-accent);background:none;border:1px solid var(--pb-border);border-radius:6px;padding:3px 8px;cursor:pointer}',
 		'#projectbar .pb-share{border:1px solid var(--pb-border) !important}',
 		'#projectbar .pb-dots{display:flex;gap:2px}',
 		'.pb-dot{display:inline-block;width:8px;height:8px;border-radius:50%}',

@@ -29,7 +29,7 @@ function sendJson(res, data, status = 200) {
 }
 
 function handleApi(req, res, urlPath) {
-	if (urlPath === '/api/projects' && req.method === 'GET') return sendJson(res, directory.list()), true;
+	if (urlPath === '/api/projects' && req.method === 'GET') return sendJson(res, new URL(req.url, 'http://x').searchParams.has('deleted') ? directory.listDeleted() : directory.list()), true;
 	if (urlPath === '/api/projects' && req.method === 'POST') {
 		let body = '';
 		req.on('data', (c) => (body += c));
@@ -48,9 +48,20 @@ function handleApi(req, res, urlPath) {
 		const p = projects.get(m[1]);
 		if (!p) return sendJson(res, { error: 'not found' }, 404), true;
 		p.state.meta.deleted = true;
+		p.state.meta.deletedAt = Date.now();
 		directory.upsert(p.state.summary());
 		for (const c of p.clients) c.send(JSON.stringify({ t: 'deleted' }));
 		return sendJson(res, { ok: true }), true;
+	}
+	const r = urlPath.match(/^\/api\/projects\/([a-z0-9]+)\/restore$/i);
+	if (r && req.method === 'POST') {
+		const p = projects.get(r[1]);
+		if (!p) return sendJson(res, { error: 'not found' }, 404), true;
+		p.state.meta.deleted = false;
+		delete p.state.meta.deletedAt;
+		p.state.meta.updatedAt = Date.now();
+		directory.upsert(p.state.summary());
+		return sendJson(res, p.state.view()), true;
 	}
 	return false;
 }

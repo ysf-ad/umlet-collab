@@ -39,6 +39,12 @@
         li button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; margin-right: 12px; cursor: pointer; }
         li button:hover { color: var(--danger); border-color: var(--border); }
         .empty, .error { padding: 32px 16px; text-align: center; color: var(--muted); }
+        details { margin-top: 28px; }
+        summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+        #deleted .name { font-weight: 500; color: var(--muted); }
+        #deleted li > div { flex: 1; min-width: 0; padding: 10px 16px; }
+        #deleted li button { color: var(--accent); border-color: var(--border); }
+        #deleted li button:hover { color: var(--accent); background: var(--hover); }
         .error { color: var(--danger); }
     </style>
 </head>
@@ -59,6 +65,11 @@
 
     <div class="toolbar"><span id="count"></span><span>Sorted by last edit</span></div>
     <ul id="projects"><li class="empty">Loading…</li></ul>
+
+    <details id="trash" hidden>
+        <summary id="trash-summary">Recently deleted</summary>
+        <ul id="deleted"></ul>
+    </details>
 </main>
 <script>
     var list = document.getElementById('projects');
@@ -106,11 +117,46 @@
         });
     }
 
+    // deleted projects keep their diagrams and can be restored
+    function renderDeleted(projects) {
+        var trash = document.getElementById('trash');
+        var deleted = document.getElementById('deleted');
+        trash.hidden = projects.length === 0;
+        document.getElementById('trash-summary').textContent = 'Recently deleted (' + projects.length + ')';
+        deleted.innerHTML = '';
+        projects.forEach(function (p) {
+            var li = document.createElement('li');
+            var info = document.createElement('div');
+            var name = document.createElement('div');
+            name.className = 'name';
+            name.textContent = p.name;
+            var meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.textContent = p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + (p.deletedAt ? ' · deleted ' + ago(p.deletedAt) : '');
+            info.appendChild(name);
+            info.appendChild(meta);
+            var restore = document.createElement('button');
+            restore.textContent = 'Restore';
+            restore.setAttribute('aria-label', 'Restore project ' + p.name);
+            restore.addEventListener('click', function () {
+                restore.disabled = true;
+                fetch('api/projects/' + encodeURIComponent(p.id) + '/restore', { method: 'POST' }).then(load);
+            });
+            li.appendChild(info);
+            li.appendChild(restore);
+            deleted.appendChild(li);
+        });
+    }
+
     function load() {
         fetch('api/projects', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(render)
             .catch(function () { list.innerHTML = '<li class="error">Couldn’t load projects. Try reloading the page.</li>'; });
+        fetch('api/projects?deleted=1', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : []; })
+            .then(renderDeleted)
+            .catch(function () { /* the section just stays hidden */ });
     }
 
     document.getElementById('create').addEventListener('submit', function (e) {

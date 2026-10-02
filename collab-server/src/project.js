@@ -33,15 +33,19 @@ export class ProjectState {
 		return new ProjectState({ id, name: cleanName(name, 'Untitled project'), createdAt: now, updatedAt: now, deleted: false, diagrams: [{ id: newId(), name: 'Diagram 1', createdAt: now, deleted: false }] });
 	}
 
-	/* what clients see: deleted diagrams are kept (their rooms still hold the data) but hidden */
+	/* what clients see: deleted diagrams keep their data (their rooms are untouched) and are listed in trash for restoring */
 	view() {
 		const m = this.meta;
-		return { id: m.id, name: m.name, createdAt: m.createdAt, updatedAt: m.updatedAt, diagrams: m.diagrams.filter((d) => !d.deleted).map(({ id, name, createdAt }) => ({ id, name, createdAt })) };
+		return {
+			id: m.id, name: m.name, createdAt: m.createdAt, updatedAt: m.updatedAt,
+			diagrams: m.diagrams.filter((d) => !d.deleted).map(({ id, name, createdAt }) => ({ id, name, createdAt })),
+			trash: m.diagrams.filter((d) => d.deleted).map(({ id, name, deletedAt }) => ({ id, name, deletedAt })).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)),
+		};
 	}
 
 	summary() {
 		const v = this.view();
-		return { id: v.id, name: v.name, createdAt: v.createdAt, updatedAt: v.updatedAt, diagrams: v.diagrams.length, deleted: !!this.meta.deleted };
+		return { id: v.id, name: v.name, createdAt: v.createdAt, updatedAt: v.updatedAt, diagrams: v.diagrams.length, deleted: !!this.meta.deleted, deletedAt: this.meta.deletedAt || null };
 	}
 
 	visible() {
@@ -73,7 +77,18 @@ export class ProjectState {
 				if (!d) return { changed: false };
 				if (this.visible().length <= 1) return { changed: false, reply: { t: 'error', message: "A project needs at least one diagram" } };
 				d.deleted = true;
+				d.deletedAt = Date.now();
 				return this.touched();
+			}
+			case 'restore': {
+				// restored diagrams come back at the end of the tab list
+				const d = diagrams.find((x) => x.id === msg.id && x.deleted);
+				if (!d) return { changed: false };
+				const others = this.visible();
+				d.deleted = false;
+				delete d.deletedAt;
+				this.meta.diagrams = others.concat([d], diagrams.filter((x) => x.deleted && x !== d));
+				return this.touched({ t: 'restored', id: d.id });
 			}
 			case 'move': {
 				// index: new position among the visible diagrams
@@ -119,5 +134,9 @@ export class DirectoryState {
 
 	list() {
 		return Array.from(this.projects.values()).filter((p) => !p.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
+	}
+
+	listDeleted() {
+		return Array.from(this.projects.values()).filter((p) => p.deleted).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
 	}
 }

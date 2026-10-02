@@ -98,6 +98,9 @@ public class MainView extends Composite implements ThemeChangeListener {
 	@UiField
 	FlowPanel restoreMenuPanel;
 
+	@UiField
+	FlowPanel storageMenuPanel;
+
 	@UiField(provided = true)
 	SplitLayoutPanel palettePropertiesSplitter = new SplitLayoutPanel() {
 		@Override
@@ -164,6 +167,11 @@ public class MainView extends Composite implements ThemeChangeListener {
 
 	public void setDiagram(Diagram diagram) {
 		diagramPanel.setDiagram(diagram);
+	}
+
+	/* hides the Dropbox import/export and browser storage (save/restore) menu entries */
+	public void hideStorageMenu() {
+		storageMenuPanel.setVisible(false);
 	}
 
 	public void hideSideBars() {

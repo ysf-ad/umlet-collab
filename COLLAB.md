@@ -6,9 +6,9 @@ A fork of [UMLet](https://github.com/umlet/umlet) whose web version (UMLetino) s
 - add a diagram (+)
 - rename a diagram or the project (double-click)
 - reorder diagrams (drag a tab)
-- delete a diagram (×)
+- delete a diagram (×) and restore it later (Deleted menu)
 
-The tab bar also shows a coloured dot for each person viewing a diagram. Everything is public to whoever has the link; there are no accounts.
+The tab bar also shows a coloured dot for each person viewing a diagram. Everything is public to whoever has the link; there are no accounts. The web build hides UMLetino's Dropbox and browser-storage (Save) menu items, because diagrams are saved to the server automatically.
 
 **In each diagram**, several people can edit at once and see:
 - each other's cursors and selections
@@ -84,7 +84,7 @@ What runs where:
 
 - There is no undo/redo in UMLetino, so there is no per-user undo either.
 - There is no auth (by design for an internal tool): anyone with the URL can see every project and edit or delete it.
-- Deleting a diagram or project only hides it; the data stays in storage, but there is no restore button yet.
+- Deleting a diagram or project only hides it. Deleted diagrams can be restored from the **Deleted** menu in the tab bar, and deleted projects from **Recently deleted** on the project list. Nothing is ever purged.
 - If two people change the same element's geometry at the same moment, one change wins; text is merged instead.
 - The Node relay keeps rooms in memory only (dropped 10 minutes after the last person leaves). The Cloudflare version persists them.
 

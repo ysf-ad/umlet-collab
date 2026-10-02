@@ -1,6 +1,7 @@
 // Cloudflare Worker for collaborative UMLetino.
 // - static files (landing page, app) are served by Workers Static Assets (dist/, see wrangler.jsonc)
 // - GET/POST /api/projects, DELETE /api/projects/<id>   project directory (landing page)
+// - GET /api/projects?deleted=1, POST /api/projects/<id>/restore   recently deleted projects
 // - /project?id=<projectId>   websocket to the project's Durable Object (diagram list, who views what)
 // - /collab?room=<name>       websocket to one Durable Object per diagram room (element sync, see room.js)
 // Everything is public: whoever has a link can edit (internal tool, no accounts).
@@ -32,7 +33,7 @@ export default {
 			return project(env, id).fetch(new Request('https://do/ws', request));
 		}
 
-		if (path === '/api/projects' && request.method === 'GET') return directory(env).fetch('https://do/list');
+		if (path === '/api/projects' && request.method === 'GET') return directory(env).fetch(url.searchParams.has('deleted') ? 'https://do/deleted' : 'https://do/list');
 		if (path === '/api/projects' && request.method === 'POST') {
 			const body = await request.json().catch(() => ({}));
 			const id = newId();
@@ -40,6 +41,8 @@ export default {
 		}
 		const m = path.match(/^\/api\/projects\/([a-z0-9]+)$/i);
 		if (m && request.method === 'DELETE') return project(env, m[1]).fetch('https://do/delete', { method: 'POST' });
+		const r = path.match(/^\/api\/projects\/([a-z0-9]+)\/restore$/i);
+		if (r && request.method === 'POST') return project(env, r[1]).fetch('https://do/restore', { method: 'POST' });
 
 		return env.ASSETS.fetch(request);
 	},
@@ -144,9 +147,19 @@ export class Project extends DurableObject {
 		if (path === '/delete') {
 			if (!this.state) return json({ error: 'not found' }, 404);
 			this.state.meta.deleted = true;
+			this.state.meta.deletedAt = Date.now();
 			await this.save();
 			broadcast(this.ctx, JSON.stringify({ t: 'deleted' }));
 			return json({ ok: true });
+		}
+		if (path === '/restore') {
+			if (!this.state) return json({ error: 'not found' }, 404);
+			this.state.meta.deleted = false;
+			delete this.state.meta.deletedAt;
+			this.state.meta.updatedAt = Date.now();
+			await this.save();
+			broadcast(this.ctx, JSON.stringify(this.message()));
+			return json(this.state.view());
 		}
 		const [client, server] = Object.values(new WebSocketPair());
 		this.ctx.acceptWebSocket(server);
@@ -209,6 +222,7 @@ export class Directory extends DurableObject {
 	async fetch(request) {
 		const path = new URL(request.url).pathname;
 		if (path === '/list') return json(this.state.list());
+		if (path === '/deleted') return json(this.state.listDeleted());
 		const body = await request.json();
 		const entry = path === '/upsert' ? this.state.upsert(body) : path === '/touch' ? this.state.touch(body.id) : null;
 		if (entry) await this.ctx.storage.put('p:' + entry.id, entry);

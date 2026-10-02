@@ -13,6 +13,8 @@ public class WebStartupDiagramLoader implements StartupDiagramLoader {
     @Override
     public void loadDiagram(MainView mainView) {
         new CollabBridge(mainView).export();
+        // diagrams are stored on the collaboration server, so Dropbox and browser storage would only confuse
+        mainView.hideStorageMenu();
         // lets the host page reserve space above the editor (project tab bar, see projectbar.js)
         RootLayoutPanel.get().getElement().setId("umlet-root");
 

@@ -4,6 +4,6 @@
   "private": true,
   "license": "GPL-3.0",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": { "start": "node server.js", "test": "node --test test/*.test.js" },
   "dependencies": { "ws": "^8.18.0" }
 }

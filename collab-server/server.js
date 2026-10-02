@@ -1,7 +1,7 @@
 // Tiny relay for collaborative UMLetino.
 // - serves the compiled umlet-web app (static files)
 // - websocket rooms keyed by ?room=, relays messages to everyone else in the room
-// - keeps the latest diagram per room so late joiners get it immediately
+// - keeps the latest version of every element per room (same merge rule as the clients) so late joiners get the diagram immediately
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -33,24 +33,34 @@ const server = http.createServer((req, res) => {
 	res.end('not found');
 });
 
-const rooms = new Map(); // room -> { clients: Set<ws>, doc: string|null }
+const rooms = new Map(); // room -> { clients: Set<ws>, elements: Map<id, record> }
+
+// same rule as collab.js: higher version wins, ties are broken by the lower nonce
+function wins(op, cur) {
+	return !cur || op.version > cur.version || (op.version === cur.version && op.nonce < cur.nonce);
+}
 
 const wss = new WebSocketServer({ server, path: '/collab' });
 let nextId = 1;
 
 wss.on('connection', (ws, req) => {
 	const roomName = new URL(req.url, 'http://x').searchParams.get('room') || 'default';
-	if (!rooms.has(roomName)) rooms.set(roomName, { clients: new Set(), doc: null });
+	if (!rooms.has(roomName)) rooms.set(roomName, { clients: new Set(), elements: new Map() });
 	const room = rooms.get(roomName);
 	ws.id = nextId++;
 	room.clients.add(ws);
-	ws.send(JSON.stringify({ t: 'hello', id: ws.id, doc: room.doc }));
+	ws.send(JSON.stringify({ t: 'hello', id: ws.id, elements: Array.from(room.elements.values()) }));
 
 	ws.on('message', (raw) => {
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
 		msg.from = ws.id;
-		if (msg.t === 'doc') room.doc = msg.xml;
+		if (msg.t === 'ops') {
+			if (!Array.isArray(msg.ops)) return;
+			msg.ops = msg.ops.filter((op) => op && typeof op.id === 'string' && wins(op, room.elements.get(op.id)));
+			if (!msg.ops.length) return;
+			for (const op of msg.ops) room.elements.set(op.id, op);
+		}
 		const out = JSON.stringify(msg);
 		for (const c of room.clients) if (c !== ws && c.readyState === 1) c.send(out);
 	});
@@ -60,7 +70,7 @@ wss.on('connection', (ws, req) => {
 		const out = JSON.stringify({ t: 'leave', from: ws.id });
 		for (const c of room.clients) if (c.readyState === 1) c.send(out);
 		if (room.clients.size === 0 && !process.env.KEEP_EMPTY_ROOMS) {
-			// keep doc for a while so a refresh doesn't lose the diagram
+			// keep the diagram for a while so a refresh doesn't lose the diagram
 			setTimeout(() => { if (room.clients.size === 0) rooms.delete(roomName); }, 10 * 60 * 1000);
 		}
 	});

@@ -3,6 +3,7 @@ package com.web.gwt.client.view.utils;
 import com.baselet.gwt.client.element.DiagramXmlParser;
 import com.baselet.gwt.client.view.MainView;
 import com.baselet.gwt.client.view.utils.StartupDiagramLoader;
+import com.web.gwt.client.collab.CollabBridge;
 import com.google.gwt.http.client.*;
 import com.google.gwt.user.client.Window;
 
@@ -10,7 +11,7 @@ public class WebStartupDiagramLoader implements StartupDiagramLoader {
 
     @Override
     public void loadDiagram(MainView mainView) {
-        exportCollabApi(mainView);
+        new CollabBridge(mainView).export();
 
         // if uxf parameter is set, a GET request is made to get and load the diagram from the specified URL
         String urlOrUxf = Window.Location.getParameter("uxf");
@@ -57,21 +58,4 @@ public class WebStartupDiagramLoader implements StartupDiagramLoader {
             mainView.hideSideBars();
         }
     }
-
-    // called by collab.js with a diagram received from another user
-    private static void applyRemoteDiagram(MainView mainView, String uxf) {
-        com.baselet.element.interfaces.Diagram diagram = DiagramXmlParser.xmlToDiagram(uxf);
-        if (diagram != null) {
-            mainView.setDiagram(diagram);
-        }
-    }
-
-    private native void exportCollabApi(MainView mainView) /*-{
-        $wnd.umletCollabApply = $entry(function(uxf) {
-            @com.web.gwt.client.view.utils.WebStartupDiagramLoader::applyRemoteDiagram(Lcom/baselet/gwt/client/view/MainView;Ljava/lang/String;)(mainView, uxf);
-        });
-        if ($wnd.umletCollab && $wnd.umletCollab.onReady) {
-            $wnd.umletCollab.onReady();
-        }
-    }-*/;
 }

@@ -290,6 +290,7 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 			return; // Only zoom if gridsize has changed
 		}
 
+		beginViewChange();
 		diagram.setZoomLevel(factor);
 
 		/**
@@ -313,6 +314,7 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 			notificationPopup.show("Diagram zoomed to " + factor * 10 + "%", this);
 		}
 		redraw(true);
+		endViewChange();
 	}
 
 	protected void realignElementsToGrid(List<GridElement> elements) {
@@ -326,8 +328,10 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 	}
 
 	void moveElements(int diffX, int diffY, boolean firstDrag, List<GridElement> elements) {
-		if (elements.isEmpty()) { // if nothing is selected, move whole diagram
+		boolean wholeDiagram = elements.isEmpty();
+		if (wholeDiagram) { // if nothing is selected, move whole diagram
 			elements = diagram.getGridElements();
+			beginViewChange();
 		}
 		for (GridElement ge : elements) {
 			if (firstDrag) {
@@ -335,7 +339,32 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 			}
 			ge.setRectangleDifference(diffX, diffY, 0, 0, firstDrag, stickablesToMove.get(ge), false); // uses setLocationDifference() instead of drag() to avoid special handling (eg: from Relations)
 		}
+		if (wholeDiagram) {
+			endViewChange();
+		}
 	}
+
+	private int viewChangeDepth;
+
+	/*
+	 * UMLet has no camera: zooming, panning and realigning the canvas move all elements. Such view changes are wrapped
+	 * in beginViewChange()/endViewChange() so subclasses can tell them apart from real diagram changes (used for live collaboration).
+	 */
+	protected final void beginViewChange() {
+		if (viewChangeDepth++ == 0) {
+			onBeforeViewChange();
+		}
+	}
+
+	protected final void endViewChange() {
+		if (--viewChangeDepth == 0) {
+			onAfterViewChange();
+		}
+	}
+
+	protected void onBeforeViewChange() {}
+
+	protected void onAfterViewChange() {}
 
 	public Point getLastContextMenuPosition() {
 		if (elementContextMenu.isShowing() || diagramContextMenu.isShowing()) {
@@ -378,9 +407,11 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 				scrollPanel.moveHorizontalScrollbar(-xTranslate);
 				scrollPanel.moveVerticalScrollbar(-yTranslate);
 				// then move gridelements to correct position
+				beginViewChange();
 				for (GridElement ge : gridElements) {
 					ge.setLocationDifference(-xTranslate, -yTranslate);
 				}
+				endViewChange();
 			}
 			// now realign bottom right corner to include the translate-factor and the changed visible and diagram rect
 			int width = Math.max(visibleRect.getX2(), diagramRect.getX2()) - xTranslate;
@@ -411,9 +442,11 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 			else if (mightNeedToCorrectVerticalPos) {
 				mightNeedToCorrectVerticalPos = false;
 				if (!cursorWasMovedDuringDrag && (scrollPanel.getVerticalScrollPosition() == 0 || scrollPanel.getVerticalScrollPosition() == scrollPanel.getMaximumVerticalScrollPosition())) {
+					beginViewChange();
 					for (GridElement ge : gridElements) {
 						ge.setLocationDifference(0, -scrollPanel.getScrollbarSize()[1]);
 					}
+					endViewChange();
 				}
 				redraw();
 				return;
@@ -428,9 +461,11 @@ public abstract class DrawPanel extends SimplePanel implements CommandTarget, Ha
 			else if (mightNeedToCorrectHorizontalPos) {
 				mightNeedToCorrectHorizontalPos = false;
 				if (!cursorWasMovedDuringDrag && (scrollPanel.getHorizontalScrollPosition() == 0 || scrollPanel.getHorizontalScrollPosition() == scrollPanel.getMaximumHorizontalScrollPosition())) {
+					beginViewChange();
 					for (GridElement ge : gridElements) {
 						ge.setLocationDifference(-scrollPanel.getScrollbarSize()[0], 0);
 					}
+					endViewChange();
 				}
 				redraw();
 				return;

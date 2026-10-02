@@ -21,6 +21,10 @@
         <when-type-is class="com.baselet.gwt.client.view.widgets.DownloadPopupPanel"/>
     </replace-with>
 
+    <replace-with class="com.web.gwt.client.view.WebDrawPanelDiagram">
+        <when-type-is class="com.baselet.gwt.client.view.DrawPanelDiagram"/>
+    </replace-with>
+
     <replace-with class="com.web.gwt.client.file.WebFileChangeNotifier">
         <when-type-is class="com.baselet.gwt.client.file.FileChangeNotifier"/>
     </replace-with>

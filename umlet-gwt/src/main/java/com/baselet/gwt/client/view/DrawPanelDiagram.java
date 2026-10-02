@@ -21,6 +21,8 @@ public class DrawPanelDiagram extends DrawPanel {
 
 	private boolean tempInvalid;
 
+	private boolean dragInProgress; // true between the first mouse move of a drag and the drag end
+
 	public DrawPanelDiagram() {
 	}
 
@@ -83,6 +85,10 @@ public class DrawPanelDiagram extends DrawPanel {
 		}
 		else {
 			super.redraw(recalcSize);
+			// some changes don't call handleFileUpdate (e.g. palette double click snaps the new element after adding it, redraw(true) realigns all elements)
+			if (fileChangeNotifier != null) {
+				fileChangeNotifier.notifyPossibleChange();
+			}
 		}
 	}
 
@@ -184,7 +190,41 @@ public class DrawPanelDiagram extends DrawPanel {
 	}
 
 	@Override
+	void onMouseMoveDragging(Point dragStart, int diffX, int diffY, GridElement draggedGridElement, boolean isShiftKeyDown, boolean isCtrlKeyDown, boolean firstDrag, boolean isMiddleMouseButton) {
+		super.onMouseMoveDragging(dragStart, diffX, diffY, draggedGridElement, isShiftKeyDown, isCtrlKeyDown, firstDrag, isMiddleMouseButton);
+		if (cursorWasMovedDuringDrag && !tempInvalid) {
+			dragInProgress = true;
+			fileChangeNotifier.notifyPossibleChange();
+		}
+	}
+
+	@Override
+	protected void onBeforeViewChange() {
+		if (fileChangeNotifier != null) {
+			fileChangeNotifier.beforeViewChange();
+		}
+	}
+
+	@Override
+	protected void onAfterViewChange() {
+		if (fileChangeNotifier != null) {
+			fileChangeNotifier.afterViewChange();
+		}
+	}
+
+	public boolean isDragInProgress() {
+		return dragInProgress;
+	}
+
+	/* preview elements are temporarily shown while dragging from the palette and are not part of the diagram yet */
+	public boolean isPreviewElement(GridElement ge) {
+		return currentPreviewElements != null && currentPreviewElements.contains(ge)
+				|| currentPreviewElementsInstantiated != null && currentPreviewElementsInstantiated.contains(ge);
+	}
+
+	@Override
 	public void onMouseDragEnd(GridElement gridElement, Point lastPoint) {
+		dragInProgress = false;
 		super.onMouseDragEnd(gridElement, lastPoint);
 		if (cursorWasMovedDuringDrag) {
 			handleFileUpdate();

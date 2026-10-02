@@ -10,4 +10,7 @@ public interface FileChangeNotifier {
 	default void beforeViewChange() {}
 
 	default void afterViewChange() {}
+
+	/* the mouse button was released after pressing it on the diagram; moved: whether anything was dragged */
+	default void pointerReleased(boolean moved) {}
 }

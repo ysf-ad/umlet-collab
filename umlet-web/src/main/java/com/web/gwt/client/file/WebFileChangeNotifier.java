@@ -28,6 +28,13 @@ public class WebFileChangeNotifier implements FileChangeNotifier {
         }
     }
 
+    @Override
+    public void pointerReleased(boolean moved) {
+        if (CollabBridge.get() != null) {
+            CollabBridge.get().pointerReleased(moved);
+        }
+    }
+
     // tells the collaboration client (collab.js) that the diagram changed; it pulls the changed elements via umletCollabSnapshot()
     private native void notifyCollab(boolean live) /*-{
         if ($wnd.umletCollab && $wnd.umletCollab.onLocalChange) {

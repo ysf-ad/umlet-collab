@@ -8,6 +8,7 @@
 //   umletCollabSelection()                 -> ids of the selected elements
 //   umletCollabPropertiesId()              -> id of the element shown in the properties panel ('_diagram' if none)
 //   umletCollabRect(id)                    -> local canvas rectangle {x, y, w, h} of an element
+//   umletCollabCanvas()                    -> the diagram's <canvas> element
 //
 // Sync model:
 // - geometry/type/relation points: per element {version, nonce}, last writer wins (Excalidraw style). A remote record
@@ -22,13 +23,8 @@
 	var LIVE_INTERVAL_MS = 33; // ~30 Hz for drags, cursors and selection
 	var REMOTE = 'remote';     // Yjs transaction origin for updates received from the server
 
-	var params = new URLSearchParams(location.search);
-	var room = params.get('room');
-	if (!room && !params.has('project')) {
-		room = Math.random().toString(36).slice(2, 8);
-		params.set('room', room);
-		history.replaceState(null, '', location.pathname + '?' + params.toString() + location.hash);
-	}
+	// without ?room= (a standalone diagram) the project bar chooses the room, or sends the user to the project list
+	var room = new URLSearchParams(location.search).get('room');
 
 	// display name and colour are remembered per browser (storage may be unavailable, e.g. in private windows)
 	function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
@@ -351,13 +347,7 @@
 	// ---- presence: cursors and selections ----------------------------------------
 	// positions are sent in shared diagram coordinates (default zoom, without the local view offset)
 	function diagramCanvas() {
-		var best = null, bestArea = 0;
-		var all = document.getElementsByTagName('canvas');
-		for (var i = 0; i < all.length; i++) {
-			var r = all[i].getBoundingClientRect();
-			if (r.width * r.height > bestArea) { bestArea = r.width * r.height; best = all[i]; }
-		}
-		return best;
+		return ready ? window.umletCollabCanvas() : null; // not the palette's canvas, which can be the larger one
 	}
 
 	// the scrolling viewport around the diagram canvas; overlays are clipped to it

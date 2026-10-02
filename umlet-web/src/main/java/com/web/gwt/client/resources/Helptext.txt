@@ -1,0 +1,8 @@
+Double-click an element on the right to add it
+
+Changes are live for everyone and saved automatically
+Use the tabs at the top to switch diagrams
+
+<File Import> loads .uxf, <File Export> saves .uxf, png or pdf
+
+halign=center

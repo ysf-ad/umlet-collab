@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -15,7 +16,7 @@ import com.baselet.control.enums.ElementId;
 import com.baselet.element.Selector;
 import com.baselet.element.interfaces.Diagram;
 import com.baselet.element.interfaces.GridElement;
-import com.baselet.gwt.client.element.DiagramGwt;
+import com.baselet.element.relation.Relation;
 import com.baselet.gwt.client.element.ElementFactoryGwt;
 import com.baselet.gwt.client.element.GridElementZoomUtil;
 import com.baselet.gwt.client.view.DrawPanelDiagram;
@@ -41,7 +42,8 @@ public class CollabBridge {
 	private static CollabBridge current;
 
 	private final MainView mainView;
-	private final Diagram defaultZoomDiagram = new DiagramGwt(new ArrayList<GridElement>());
+	// remote records for elements the local user is holding with the mouse (applied on release unless the user dragged)
+	private final Map<String, JavaScriptObject> heldBack = new LinkedHashMap<String, JavaScriptObject>();
 	private int viewX, viewY;
 	// reference element and its shared position (at default zoom) captured before a view change
 	private GridElement viewRef;
@@ -75,6 +77,20 @@ public class CollabBridge {
 			viewY = viewRef.getRectangle().getY() - (int) Math.round(viewRefSharedY * toLocal);
 		}
 		viewRef = null;
+	}
+
+	public void pointerReleased(boolean moved) {
+		if (heldBack.isEmpty()) {
+			return;
+		}
+		JsArray<JavaScriptObject> records = JavaScriptObject.createArray().cast();
+		for (JavaScriptObject rec : heldBack.values()) {
+			records.push(rec);
+		}
+		heldBack.clear();
+		if (!moved) { // only clicked: show what the others changed meanwhile. If dragged, the local change wins (it is sent with a higher version)
+			apply(records, false);
+		}
 	}
 
 	/* a newly loaded diagram (import, ?uxf=) defines the shared coordinates itself */
@@ -112,15 +128,14 @@ public class CollabBridge {
 			if (panel().isPreviewElement(ge)) {
 				continue;
 			}
-			GridElement normalized = ge;
-			if (zoom != SharedConstants.DEFAULT_GRID_SIZE || viewX != 0 || viewY != 0) {
-				// copy into a diagram at default zoom: relations recalculate their size from their points using the diagram's zoom level
-				normalized = ElementFactoryGwt.create(ge, defaultZoomDiagram);
-				normalized.setLocationDifference(-viewX, -viewY);
-				GridElementZoomUtil.zoomEntities(zoom, SharedConstants.DEFAULT_GRID_SIZE, Collections.singletonList(normalized));
-			}
-			Rectangle r = normalized.getRectangle();
-			result.push(record(idOf(ge), ge.getId().name(), r.getX(), r.getY(), r.getWidth(), r.getHeight(), ge.getPanelAttributes(), normalized.getAdditionalAttributes()));
+			// plain arithmetic: copying the element and zooming the copy runs element logic (e.g. re-centering) that
+			// makes the result depend on the zoom level. Relation points (additional attributes) are zoom independent.
+			Rectangle r = ge.getRectangle();
+			double toDefault = SharedConstants.DEFAULT_GRID_SIZE / (double) zoom;
+			result.push(record(idOf(ge), ge.getId().name(),
+					(int) Math.round((r.getX() - viewX) * toDefault), (int) Math.round((r.getY() - viewY) * toDefault),
+					(int) Math.round(r.getWidth() * toDefault), (int) Math.round(r.getHeight() * toDefault),
+					ge.getPanelAttributes(), ge.getAdditionalAttributes()));
 		}
 		return result;
 	}
@@ -161,8 +176,9 @@ public class CollabBridge {
 				}
 				continue;
 			}
-			if (inDiagram && panel.isDragInProgress() && selector.isSelected(existing)) {
-				continue; // never move an element away under the local user's mouse; their drop will win
+			if (inDiagram && panel.isPointerDown() && selector.isSelected(existing)) {
+				heldBack.put(id, rec); // never change an element under the local user's mouse (see pointerReleased)
+				continue;
 			}
 
 			GridElement incoming = createElement(rec, diagram, zoom);
@@ -172,9 +188,20 @@ public class CollabBridge {
 					existing.setPanelAttributes(incoming.getPanelAttributes());
 					updatePropertiesPanel |= existing == shownInPropertiesPanel;
 				}
-				existing.setRectangle(incoming.getRectangle());
-				if (!existing.getAdditionalAttributes().equals(incoming.getAdditionalAttributes())) {
-					existing.setAdditionalAttributes(incoming.getAdditionalAttributes());
+				Rectangle target = incoming.getRectangle();
+				boolean pointsChanged = !existing.getAdditionalAttributes().equals(incoming.getAdditionalAttributes());
+				if (existing instanceof Relation) {
+					// a relation's size follows from its points: set the position, then the points (which resizes it)
+					if (pointsChanged || existing.getRectangle().getX() != target.getX() || existing.getRectangle().getY() != target.getY()) {
+						existing.setLocation(target.getX(), target.getY());
+						existing.setAdditionalAttributes(incoming.getAdditionalAttributes());
+					}
+				}
+				else {
+					existing.setRectangle(target);
+					if (pointsChanged) {
+						existing.setAdditionalAttributes(incoming.getAdditionalAttributes());
+					}
 				}
 			}
 			else { // new element, or the element type changed
@@ -239,6 +266,10 @@ public class CollabBridge {
 		return record(id, "", r.getX(), r.getY(), r.getWidth(), r.getHeight(), "", "");
 	}
 
+	JavaScriptObject canvasElement() {
+		return panel().getCanvasElement();
+	}
+
 	int zoomLevel() {
 		return panel().getDiagram().getZoomLevel();
 	}
@@ -265,6 +296,9 @@ public class CollabBridge {
 				x: that.@com.web.gwt.client.collab.CollabBridge::viewX()(),
 				y: that.@com.web.gwt.client.collab.CollabBridge::viewY()()
 			};
+		});
+		$wnd.umletCollabCanvas = $entry(function() {
+			return that.@com.web.gwt.client.collab.CollabBridge::canvasElement()();
 		});
 		$wnd.umletCollabSelection = $entry(function() {
 			return that.@com.web.gwt.client.collab.CollabBridge::selection()();

@@ -22,6 +22,7 @@ public class DrawPanelDiagram extends DrawPanel {
 	private boolean tempInvalid;
 
 	private boolean dragInProgress; // true between the first mouse move of a drag and the drag end
+	private boolean pointerDown; // true between mouse down and mouse up on the diagram
 
 	public DrawPanelDiagram() {
 	}
@@ -111,6 +112,7 @@ public class DrawPanelDiagram extends DrawPanel {
 
 	@Override
 	void onMouseDown(GridElement element, boolean isControlKeyDown) {
+		pointerDown = true;
 		super.onMouseDown(element, isControlKeyDown);
 		cancelDragOfPalette();
 		if (!isControlKeyDown || selector.getSelectedElements().size() > 0) {
@@ -216,6 +218,14 @@ public class DrawPanelDiagram extends DrawPanel {
 		return dragInProgress;
 	}
 
+	public com.google.gwt.dom.client.CanvasElement getCanvasElement() {
+		return canvas.getCanvasElement();
+	}
+
+	public boolean isPointerDown() {
+		return pointerDown;
+	}
+
 	/* preview elements are temporarily shown while dragging from the palette and are not part of the diagram yet */
 	public boolean isPreviewElement(GridElement ge) {
 		return currentPreviewElements != null && currentPreviewElements.contains(ge)
@@ -225,11 +235,16 @@ public class DrawPanelDiagram extends DrawPanel {
 	@Override
 	public void onMouseDragEnd(GridElement gridElement, Point lastPoint) {
 		dragInProgress = false;
+		pointerDown = false;
+		boolean moved = cursorWasMovedDuringDrag;
 		super.onMouseDragEnd(gridElement, lastPoint);
 		if (cursorWasMovedDuringDrag) {
 			handleFileUpdate();
 		}
 		cursorWasMovedDuringDrag = false;
+		if (fileChangeNotifier != null) {
+			fileChangeNotifier.pointerReleased(moved);
+		}
 	}
 
 	@Override

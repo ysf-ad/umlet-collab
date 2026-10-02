@@ -32,7 +32,11 @@ for (const entry of fs.readdirSync(webapp)) {
 	fs.cpSync(path.join(webapp, entry), path.join(dist, renamed[entry] || entry), { recursive: true });
 }
 const app = path.join(dist, 'app.html');
-fs.writeFileSync(app, fs.readFileSync(app, 'utf8').replace('${build.time.urlsafe}', Date.now().toString(36)));
+// version stamp on every script so browsers never keep running an old collab.js/projectbar.js after a deploy
+const stamp = Date.now().toString(36);
+fs.writeFileSync(app, fs.readFileSync(app, 'utf8')
+	.replace('${build.time.urlsafe}', stamp)
+	.replace(/src="(vendor\/yjs\.js|collab\.js|projectbar\.js)"/g, 'src="$1?v=' + stamp + '"'));
 fs.cpSync(gwtOut, path.join(dist, 'umletweb'), { recursive: true });
 
 await esbuild.build({

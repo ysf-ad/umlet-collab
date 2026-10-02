@@ -1,4 +1,6 @@
-// Project tab bar for collaborative UMLetino (only active with ?project=<id>).
+// Project bar for collaborative UMLetino: ?project=<id>[&diagram=<id>] shows the project's diagrams as tabs,
+// ?room=<name> (a standalone diagram from before projects existed) shows the bar without tabs, and without
+// either the user is sent to the project list.
 //
 // A project is a list of diagrams; each diagram is its own collaborative room "<projectId>/<diagramId>".
 // The bar shows one tab per diagram, live for everyone in the project: add (+), rename (double click),
@@ -8,7 +10,11 @@
 (function () {
 	var params = new URLSearchParams(location.search);
 	var projectId = params.get('project');
-	if (!projectId) return;
+	var standalone = !projectId;
+	if (standalone && !params.get('room')) {
+		location.replace('./');
+		return;
+	}
 
 	var BAR_HEIGHT = 36;
 	var ws = null;
@@ -26,7 +32,7 @@
 	bar.id = 'projectbar';
 	bar.innerHTML =
 		'<a class="pb-home" href="./" title="All projects">&#9664; Projects</a>' +
-		'<span class="pb-project" title="Double-click to rename the project"></span>' +
+		'<button class="pb-project" title="Switch, create or rename projects" aria-haspopup="true" aria-expanded="false"><span class="pb-project-name"></span> &#9662;</button>' +
 		'<div class="pb-tabs" role="tablist"></div>' +
 		'<button class="pb-add" title="New diagram" aria-label="New diagram">+</button>' +
 		'<div class="pb-spacer"></div>' +
@@ -35,12 +41,16 @@
 		'<button class="pb-me" title="Change your display name"></button>' +
 		'<button class="pb-share" title="Copy a link to this diagram">Copy link</button>';
 	var tabsEl = bar.querySelector('.pb-tabs');
-	var projectEl = bar.querySelector('.pb-project');
+	var projectButton = bar.querySelector('.pb-project');
+	var projectEl = bar.querySelector('.pb-project-name');
+	var projectMenu = document.createElement('div');
+	projectMenu.className = 'pb-menu';
+	projectMenu.hidden = true;
 	var statusEl = bar.querySelector('.pb-status');
 	var meEl = bar.querySelector('.pb-me');
 	var trashEl = bar.querySelector('.pb-trash');
 	var trashMenu = document.createElement('div');
-	trashMenu.id = 'pb-trash-menu';
+	trashMenu.className = 'pb-menu';
 	trashMenu.hidden = true;
 	var toast = document.createElement('div');
 	toast.id = 'pb-toast';
@@ -49,10 +59,15 @@
 		document.body.appendChild(bar);
 		document.body.appendChild(toast);
 		document.body.appendChild(trashMenu);
+		document.body.appendChild(projectMenu);
 		var dark = typeof theme !== 'undefined' && theme === 'DARK'; // set by the host page
 		document.body.classList.add('has-projectbar', dark ? 'pb-dark' : 'pb-light');
 		window.dispatchEvent(new Event('resize')); // GWT re-lays out below the bar
 		renderMe();
+		if (standalone) {
+			document.body.classList.add('pb-standalone');
+			projectEl.textContent = 'Standalone diagram';
+		}
 	}
 	if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
 
@@ -179,10 +194,16 @@
 	});
 
 	// ---- rendering ------------------------------------------------------------------
+	var activeEdit = null; // {input, finish} of the inline rename in progress
+
 	function renderTabs() {
 		if (!project) return;
-		var editing = tabsEl.querySelector('input');
-		if (editing) return; // don't disturb an inline rename; re-rendered when it ends
+		if (activeEdit) {
+			// don't disturb an inline rename (re-rendered when it ends), but never let an abandoned one freeze the bar
+			if (document.activeElement === activeEdit.input && tabsEl.contains(activeEdit.input)) return;
+			activeEdit.finish(true);
+			return;
+		}
 		tabsEl.innerHTML = '';
 		project.diagrams.forEach(function (d, index) {
 			var tab = document.createElement('div');
@@ -280,27 +301,89 @@
 		});
 	}
 
-	function openTrash() {
-		var r = trashEl.getBoundingClientRect();
-		trashMenu.style.top = (r.bottom + 4) + 'px';
-		trashMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-		trashMenu.hidden = false;
-		trashEl.setAttribute('aria-expanded', 'true');
+	// ---- dropdown menus (Deleted, project switcher) ------------------------------------
+	var menus = [];
+	function dropdown(button, menu, alignRight, onOpen) {
+		var m = {
+			open: function () {
+				menus.forEach(function (other) { if (other !== m) other.close(); });
+				if (onOpen) onOpen();
+				var r = button.getBoundingClientRect();
+				menu.style.top = (r.bottom + 4) + 'px';
+				menu.style.left = alignRight ? '' : Math.max(8, r.left) + 'px';
+				menu.style.right = alignRight ? Math.max(8, window.innerWidth - r.right) + 'px' : '';
+				menu.hidden = false;
+				button.setAttribute('aria-expanded', 'true');
+			},
+			close: function () {
+				menu.hidden = true;
+				button.setAttribute('aria-expanded', 'false');
+			}
+		};
+		button.addEventListener('click', function (e) {
+			e.stopPropagation();
+			if (menu.hidden) m.open(); else m.close();
+		});
+		menus.push(m);
+		return m;
 	}
-
-	function closeTrash() {
-		trashMenu.hidden = true;
-		trashEl.setAttribute('aria-expanded', 'false');
-	}
-
-	trashEl.addEventListener('click', function (e) {
-		e.stopPropagation();
-		if (trashMenu.hidden) { renderTrash(); openTrash(); } else closeTrash();
-	});
 	document.addEventListener('mousedown', function (e) {
-		if (!trashMenu.hidden && !trashMenu.contains(e.target) && e.target !== trashEl) closeTrash();
+		var inside = e.target.closest && e.target.closest('.pb-menu, .pb-trash, .pb-project');
+		if (!inside) menus.forEach(function (m) { m.close(); });
 	}, true);
-	document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeTrash(); });
+	document.addEventListener('keydown', function (e) { if (e.key === 'Escape') menus.forEach(function (m) { m.close(); }); });
+
+	var trashDropdown = dropdown(trashEl, trashMenu, true, renderTrash);
+	function closeTrash() { trashDropdown.close(); }
+
+	// project switcher: every project, plus create / rename / all projects
+	function menuItem(label, onClick) {
+		var item = document.createElement('button');
+		item.className = 'pb-menu-item';
+		item.textContent = label;
+		item.addEventListener('click', function () { projectDropdown.close(); onClick(); });
+		projectMenu.appendChild(item);
+	}
+	function renderProjectMenu() {
+		projectMenu.innerHTML = '<div class="pb-menu-title">Projects</div><div class="pb-menu-list"><div class="pb-menu-hint">Loading\u2026</div></div><div class="pb-menu-sep"></div>';
+		menuItem('+ New project\u2026', createProject);
+		if (!standalone) menuItem('Rename this project\u2026', renameProject);
+		menuItem('All projects', function () { location.href = './'; });
+		fetch('api/projects', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (list) {
+			var box = projectMenu.querySelector('.pb-menu-list');
+			box.innerHTML = '';
+			if (!list.length) box.innerHTML = '<div class="pb-menu-hint">No projects yet</div>';
+			list.forEach(function (p) {
+				var a = document.createElement('a');
+				a.className = 'pb-menu-item' + (p.id === projectId ? ' current' : '');
+				a.href = 'app?project=' + encodeURIComponent(p.id);
+				var name = document.createElement('span');
+				name.className = 'pb-menu-name';
+				name.textContent = (p.id === projectId ? '\u2713 ' : '') + p.name;
+				var count = document.createElement('span');
+				count.className = 'pb-menu-count';
+				count.textContent = p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams');
+				a.appendChild(name);
+				a.appendChild(count);
+				box.appendChild(a);
+			});
+		}).catch(function () {
+			projectMenu.querySelector('.pb-menu-list').innerHTML = '<div class="pb-menu-hint">Couldn\u2019t load projects</div>';
+		});
+	}
+	var projectDropdown = dropdown(projectButton, projectMenu, false, renderProjectMenu);
+
+	function createProject() {
+		var name = prompt('Name of the new project:', '');
+		if (name === null) return;
+		fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) })
+			.then(function (r) { return r.json(); })
+			.then(function (p) { location.href = 'app?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
+			.catch(function () { showToast('Couldn\u2019t create the project. Try again.'); });
+	}
+	function renameProject() {
+		if (project) inlineEdit(projectEl, project.name, function (name) { send({ t: 'renameProject', name: name }); });
+	}
 
 	function renderMe() {
 		meEl.innerHTML = '';
@@ -319,12 +402,19 @@
 		input.maxLength = 80;
 		target.textContent = '';
 		target.appendChild(input);
-		input.focus();
-		input.select();
 		var done = false;
+		function focusInput() {
+			if (done || document.activeElement === input) return;
+			input.focus();
+			input.select();
+		}
+		focusInput();
+		setTimeout(focusInput, 0);  // GWT may move the focus to the canvas while switching diagrams
+		setTimeout(focusInput, 150);
 		function finish(commit) {
 			if (done) return;
 			done = true;
+			if (activeEdit && activeEdit.input === input) activeEdit = null;
 			var v = input.value.trim();
 			input.remove();
 			if (commit && v && v !== value) onCommit(v);
@@ -333,11 +423,17 @@
 		}
 		input.addEventListener('keydown', function (e) {
 			e.stopPropagation(); // keep UMLet shortcuts (e.g. Delete) away from the input
-			if (e.key === 'Enter') finish(true);
+			if (e.key === 'Enter') { e.preventDefault(); finish(true); }
 			else if (e.key === 'Escape') finish(false);
 		});
-		input.addEventListener('keyup', function (e) { e.stopPropagation(); });
-		input.addEventListener('blur', function () { finish(true); });
+		input.addEventListener('keyup', function (e) { e.stopPropagation(); e.preventDefault(); }); // a space must not click the surrounding button
+		var openedAt = Date.now();
+		input.addEventListener('blur', function () {
+			// a blur right after opening is GWT grabbing the focus while the diagram switches, not the user leaving
+			if (Date.now() - openedAt < 300) setTimeout(focusInput, 0);
+			else finish(true);
+		});
+		activeEdit = { input: input, finish: finish };
 		input.addEventListener('click', function (e) { e.stopPropagation(); });
 		input.addEventListener('dblclick', function (e) { e.stopPropagation(); });
 	}
@@ -352,8 +448,10 @@
 		pendingAdd = 'r' + (++requestCounter) + Date.now();
 		send({ t: 'add', requestId: pendingAdd });
 	});
-	projectEl.addEventListener('dblclick', function () {
-		if (project) inlineEdit(projectEl, project.name, function (name) { send({ t: 'renameProject', name: name }); });
+	projectButton.addEventListener('dblclick', function (e) {
+		e.preventDefault();
+		projectDropdown.close();
+		renameProject();
 	});
 	meEl.addEventListener('click', function () {
 		var name = prompt('Your display name (shown to others):', umletCollab.me.name);
@@ -380,7 +478,10 @@
 		'#projectbar button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}',
 		'#projectbar .pb-home{align-self:center;color:var(--pb-muted);text-decoration:none;white-space:nowrap;padding:4px 6px;border-radius:6px}',
 		'#projectbar .pb-home:hover{background:var(--pb-tab);color:var(--pb-fg)}',
-		'#projectbar .pb-project{align-self:center;font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 6px;cursor:text}',
+		'#projectbar .pb-project{align-self:center;font-weight:600;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;border-radius:6px}',
+		'#projectbar .pb-project:hover,#projectbar .pb-project[aria-expanded=true]{background:var(--pb-tab)}',
+		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
+		'body.pb-standalone #projectbar .pb-project{font-weight:400;color:var(--pb-muted)}',
 		'#projectbar .pb-tabs{display:flex;align-items:flex-end;align-self:stretch;gap:2px;overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:none}',
 		'#projectbar .pb-tab{display:flex;align-items:center;gap:6px;height:29px;padding:0 6px 0 12px;background:var(--pb-tab);border:1px solid var(--pb-border);border-bottom:0;border-radius:7px 7px 0 0;cursor:pointer;white-space:nowrap;max-width:220px;color:var(--pb-muted)}',
 		'#projectbar .pb-tab:hover{color:var(--pb-fg)}',
@@ -399,8 +500,16 @@
 		'#projectbar .pb-trash{color:var(--pb-muted)}',
 		'#projectbar .pb-trash:hover{background:var(--pb-tab);color:var(--pb-fg)}',
 		'#projectbar .pb-trash[hidden]{display:none}',
-		'#pb-trash-menu{position:fixed;min-width:240px;max-width:340px;max-height:60vh;overflow-y:auto;background:var(--pb-active);color:var(--pb-fg);border:1px solid var(--pb-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px;font:13px system-ui,sans-serif;z-index:1002}',
-		'#pb-trash-menu[hidden]{display:none}',
+		'.pb-menu{position:fixed;min-width:240px;max-width:340px;max-height:70vh;overflow-y:auto;background:var(--pb-active);color:var(--pb-fg);border:1px solid var(--pb-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px;font:13px system-ui,sans-serif;z-index:1002}',
+		'.pb-menu[hidden]{display:none}',
+		'.pb-menu-title{padding:6px 8px 4px;color:var(--pb-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}',
+		'.pb-menu-item{display:flex;justify-content:space-between;gap:12px;width:100%;box-sizing:border-box;padding:7px 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer}',
+		'.pb-menu-item:hover{background:var(--pb-bg)}',
+		'.pb-menu-item.current{font-weight:600}',
+		'.pb-menu-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+		'.pb-menu-count{color:var(--pb-muted);font-weight:400;white-space:nowrap}',
+		'.pb-menu-hint{padding:7px 8px;color:var(--pb-muted)}',
+		'.pb-menu-sep{height:1px;margin:4px 0;background:var(--pb-border)}',
 		'.pb-trash-row{display:flex;align-items:center;gap:12px;padding:6px 8px;border-radius:6px}',
 		'.pb-trash-row:hover{background:var(--pb-bg)}',
 		'.pb-trash-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -418,5 +527,5 @@
 	].join('\n');
 	document.head.appendChild(style);
 
-	connect();
+	if (!standalone) connect();
 })();

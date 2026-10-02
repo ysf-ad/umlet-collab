@@ -71,7 +71,8 @@ const server = http.createServer((req, res) => {
 	if (handleApi(req, res, urlPath)) return;
 	if (urlPath === '/') urlPath = '/index.html';
 	for (const dir of STATIC_DIRS) {
-		const file = path.join(dir, urlPath);
+		let file = path.join(dir, urlPath);
+		if (!path.extname(file) && fs.existsSync(file + '.html')) file += '.html'; // /app -> app.html, like Cloudflare
 		if (!file.startsWith(dir + path.sep)) continue;
 		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
 		res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });

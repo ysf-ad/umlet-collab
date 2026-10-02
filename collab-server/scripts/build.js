@@ -20,8 +20,9 @@ if (!gwtOut || !fs.existsSync(gwtOut)) {
 	process.exit(1);
 }
 
-fs.rmSync(dist, { recursive: true, force: true });
+// empty dist/ instead of deleting it: a running `wrangler dev` keeps the directory itself locked on Windows
 fs.mkdirSync(dist, { recursive: true });
+for (const entry of fs.readdirSync(dist)) fs.rmSync(path.join(dist, entry), { recursive: true, force: true });
 
 const webapp = path.join(web, 'src', 'main', 'webapp');
 for (const entry of fs.readdirSync(webapp)) {

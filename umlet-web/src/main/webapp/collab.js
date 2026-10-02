@@ -169,6 +169,63 @@
 		onLocalChange(true);
 	}
 
+	// ---- insert a .uxf file into the current diagram (merge, unlike File Import which replaces it) ------------
+	// Elements get fresh ids and are placed as a group to the right of what is already there, then added like a
+	// remote change; the next flush() sees them as new local elements and sends them to everyone.
+	var DEFAULT_ZOOM = 10;
+	function newId() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
+	function childText(node, name) {
+		var c = node.getElementsByTagName(name)[0];
+		return c ? c.textContent : '';
+	}
+	function parseUxf(text) {
+		var doc = new DOMParser().parseFromString(text, 'application/xml');
+		if (doc.getElementsByTagName('parsererror').length || !doc.getElementsByTagName('diagram').length) throw new Error('not a UMLet (.uxf) file');
+		var zoom = parseInt(childText(doc.documentElement, 'zoom_level'), 10) || DEFAULT_ZOOM;
+		var f = DEFAULT_ZOOM / zoom; // records are at the default zoom level
+		var out = [];
+		var els = doc.getElementsByTagName('element');
+		for (var i = 0; i < els.length; i++) {
+			var e = els[i];
+			var type = childText(e, 'id');
+			var aa = childText(e, 'additional_attributes');
+			// relation points are stored at the file's zoom level, like the coordinates
+			if (type === 'Relation' && f !== 1) aa = aa.split(';').map(function (v) { var n = parseFloat(v); return isNaN(n) ? v : String(Math.round(n * f * 10) / 10); }).join(';');
+			out.push({
+				id: newId(), type: type,
+				x: Math.round(parseInt(childText(e, 'x'), 10) * f), y: Math.round(parseInt(childText(e, 'y'), 10) * f),
+				w: Math.round(parseInt(childText(e, 'w'), 10) * f), h: Math.round(parseInt(childText(e, 'h'), 10) * f),
+				pa: childText(e, 'panel_attributes'), aa: aa
+			});
+		}
+		return out;
+	}
+	function bounds(records) {
+		var b = null;
+		records.forEach(function (r) {
+			if (r.id === '_diagram') return;
+			if (!b) b = { x1: r.x, y1: r.y, x2: r.x + r.w, y2: r.y + r.h };
+			else { b.x1 = Math.min(b.x1, r.x); b.y1 = Math.min(b.y1, r.y); b.x2 = Math.max(b.x2, r.x + r.w); b.y2 = Math.max(b.y2, r.y + r.h); }
+		});
+		return b;
+	}
+	// returns the number of inserted elements
+	function insertUxf(text) {
+		if (!ready) throw new Error('the editor is still loading');
+		var records = parseUxf(text);
+		if (!records.length) return 0;
+		var have = bounds(window.umletCollabSnapshot());
+		var add = bounds(records);
+		if (have) {
+			// to the right of the existing diagram, top-aligned, snapped to the grid
+			var dx = Math.ceil((have.x2 + 60 - add.x1) / DEFAULT_ZOOM) * DEFAULT_ZOOM;
+			var dy = Math.round((have.y1 - add.y1) / DEFAULT_ZOOM) * DEFAULT_ZOOM;
+			records.forEach(function (r) { r.x += dx; r.y += dy; });
+		}
+		applyRecords(records, false);
+		return records.length;
+	}
+
 	function transformIndex(index, delta) {
 		var pos = 0;
 		for (var i = 0; i < delta.length; i++) {
@@ -342,6 +399,7 @@
 		},
 		onReady: function () { ready = true; trySync(); },
 		onLocalChange: onLocalChange,
+		insertUxf: insertUxf,
 		debug: {
 			state: function () {
 				return { synced: synced, elements: Array.from(known.values()), texts: texts.toJSON(), peers: Object.keys(peers).map(function (id) { return { id: id, name: peers[id].name, sel: peers[id].sel }; }) };

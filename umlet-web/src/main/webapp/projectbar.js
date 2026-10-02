@@ -56,6 +56,11 @@
 	var trashMenu = el('sl-menu');
 	var trashDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-end', className: 'pb-trash' }, [trashButton, trashMenu]);
 
+	// Insert: merge a .uxf file into the current diagram (File Import in the editor menu replaces the diagram instead)
+	var insertInput = el('input', { type: 'file', accept: '.uxf,.xml', multiple: true, hidden: true });
+	var insertButton = tooltip('Add the elements of a .uxf file to this diagram, next to what is already here',
+		el('sl-button', { variant: 'text', size: 'small', className: 'pb-insert' }, [icon('file-earmark-plus', 'prefix'), document.createTextNode('Insert .uxf')]));
+
 	var statusEl = el('span', { className: 'pb-status' });
 	var themeIcon = el('sl-icon-button', { name: 'moon', label: 'Dark mode' });
 	var themeTooltip = tooltip('Dark mode', themeIcon);
@@ -72,6 +77,8 @@
 		addButton,
 		el('div', { className: 'pb-spacer' }),
 		statusEl,
+		insertButton,
+		insertInput,
 		trashDropdown,
 		themeTooltip,
 		meButton,
@@ -113,6 +120,16 @@
 		clearTimeout(toastTimer);
 		toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 3500);
 	}
+
+	insertButton.addEventListener('click', function () { insertInput.value = ''; insertInput.click(); });
+	insertInput.addEventListener('change', function () {
+		Array.prototype.forEach.call(insertInput.files, function (file) {
+			file.text().then(function (text) {
+				var n = window.umletCollab.insertUxf(text);
+				showToast(n ? 'Inserted ' + n + ' element' + (n === 1 ? '' : 's') + ' from ' + file.name : file.name + ' has no elements');
+			}).catch(function (e) { showToast('Could not insert ' + file.name + ': ' + e.message); });
+		});
+	});
 
 	function send(msg) {
 		if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));

@@ -14,6 +14,9 @@
 //   replaces the local one only if its version is higher (ties: lower nonce), so all clients converge.
 // - element text (panel attributes): one Y.Text per element in a shared Yjs document, so concurrent typing merges.
 // - presence (cursor + selection): ephemeral, never stored.
+//
+// Rooms: ?room=<name> joins that room. In a project (?project=..., see projectbar.js) the project bar picks the
+// room per diagram tab and calls umletCollab.switchRoom(); switching keeps the page (no GWT reload).
 (function () {
 	var DEFAULT_ZOOM = 10;
 	var LIVE_INTERVAL_MS = 33; // ~30 Hz for drags, cursors and selection
@@ -21,14 +24,22 @@
 
 	var params = new URLSearchParams(location.search);
 	var room = params.get('room');
-	if (!room) {
+	if (!room && !params.has('project')) {
 		room = Math.random().toString(36).slice(2, 8);
 		params.set('room', room);
 		history.replaceState(null, '', location.pathname + '?' + params.toString() + location.hash);
 	}
 
+	// display name and colour are remembered per browser (storage may be unavailable, e.g. in private windows)
+	function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+	function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* not remembered */ } }
 	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa4c2', '#f032e6', '#469990'];
-	var me = { id: null, color: COLORS[Math.floor(Math.random() * COLORS.length)], name: 'User ' + Math.floor(Math.random() * 90 + 10) };
+	var me = {
+		id: null,
+		color: stored('umletcollab.color') || COLORS[Math.floor(Math.random() * COLORS.length)],
+		name: stored('umletcollab.name') || 'User ' + Math.floor(Math.random() * 90 + 10)
+	};
+	store('umletcollab.color', me.color);
 
 	var ws = null;
 	var ready = false;        // GWT exported its functions
@@ -40,8 +51,7 @@
 	var liveTimer = null;
 	var lastLiveFlush = 0;
 
-	var ydoc = new Y.Doc();
-	var texts = ydoc.getMap('texts'); // element id -> Y.Text
+	var ydoc, texts; // texts: element id -> Y.Text (one document per room, see initDoc)
 
 	function rand() { return Math.floor(Math.random() * 2147483647); }
 	// text is synced through Yjs, so it is not part of the last-writer-wins content
@@ -87,9 +97,6 @@
 		if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 	}
 
-	ydoc.on('update', function (update, origin) {
-		if (origin !== REMOTE && synced) send({ t: 'y', u: toBase64(update) });
-	});
 
 	// ---- local -> remote -------------------------------------------------------
 	// While offline (after the first sync) text edits still go into the Yjs document, so they merge with the
@@ -212,7 +219,17 @@
 		Y.applyUpdate(ydoc, fromBase64(u), REMOTE);
 	}
 
-	texts.observeDeep(function (events, tr) {
+	function initDoc() {
+		if (ydoc) ydoc.destroy();
+		ydoc = new Y.Doc();
+		texts = ydoc.getMap('texts');
+		ydoc.on('update', function (update, origin) {
+			if (origin !== REMOTE && synced) send({ t: 'y', u: toBase64(update) });
+		});
+		texts.observeDeep(onRemoteTexts);
+	}
+
+	function onRemoteTexts(events, tr) {
 		if (tr.origin !== REMOTE || !synced) return;
 		var ids = new Set();
 		var editedId = window.umletCollabPropertiesId();
@@ -231,7 +248,8 @@
 			if (rec && !rec.deleted) records.push(withText(rec));
 		});
 		if (records.length) applyRecords(records, false, caretDelta);
-	});
+	}
+	initDoc();
 
 	function trySync() {
 		if (!ready || serverState === null) return;
@@ -252,15 +270,19 @@
 		everSynced = true;
 		send({ t: 'y', u: toBase64(Y.encodeStateAsUpdate(ydoc)) }); // text edits made while offline (no-op if none)
 		flush();
+		announcePresence();
 	}
 
 	var offline = false; // debugging aid: umletCollab.debug.setOffline(true) simulates a lost connection
+	var generation = 0;  // increases with every room switch; events of older sockets are ignored
 
 	function connect() {
-		if (offline) return;
+		if (offline || !room) return;
+		var gen = generation;
 		var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		ws = new WebSocket(proto + '//' + location.host + '/collab?room=' + encodeURIComponent(room));
 		ws.onmessage = function (e) {
+			if (gen !== generation) return;
 			var msg = JSON.parse(e.data);
 			if (msg.t === 'hello') {
 				me.id = msg.id;
@@ -275,13 +297,43 @@
 			else if (msg.t === 'leave') removePeer(msg.from);
 		};
 		ws.onclose = function () {
+			if (gen !== generation) return;
 			synced = false;
-			if (!offline) setTimeout(connect, 1000);
+			if (!offline) setTimeout(function () { if (gen === generation) connect(); }, 1000);
 		};
 	}
 
+	// leaves the current room and joins another one, starting with an empty diagram (used by the project tabs)
+	function switchRoom(newRoom) {
+		if (newRoom === room) return;
+		if (synced) flush(); // send anything still pending to the room we are leaving
+		generation++;
+		if (ws) { ws.onclose = null; ws.close(); ws = null; }
+		clearTimeout(liveTimer);
+		liveTimer = null;
+		Object.keys(peers).forEach(removePeer);
+		synced = false;
+		everSynced = false;
+		serverState = null;
+		known = new Map();
+		initDoc();
+		if (ready) {
+			applying = true;
+			try { window.umletCollabApply([{ id: '_diagram', type: '_diagram', pa: '' }], true); } finally { applying = false; }
+		}
+		room = newRoom;
+		connect();
+	}
+
 	window.umletCollab = {
-		room: room,
+		get room() { return room; },
+		me: me,
+		switchRoom: switchRoom,
+		setName: function (name) {
+			me.name = String(name).trim().slice(0, 40) || me.name;
+			store('umletcollab.name', me.name);
+			announcePresence(); // with the new name
+		},
 		onReady: function () { ready = true; trySync(); },
 		onLocalChange: onLocalChange,
 		debug: {
@@ -350,6 +402,7 @@
 
 	var peers = {}; // id -> {name, color, x, y, sel, cursor, boxes}
 	function onPresence(msg) {
+		var isNew = !peers[msg.from];
 		var p = peers[msg.from] || (peers[msg.from] = { boxes: {} });
 		p.name = msg.name;
 		p.color = msg.color;
@@ -357,6 +410,13 @@
 		p.y = msg.y;
 		p.sel = msg.sel || [];
 		scheduleRender();
+		if (isNew) announcePresence(); // let a newcomer see us right away (they answer once in turn, then it stops)
+	}
+
+	function announcePresence() {
+		lastSelectionSent = null;
+		lastPresence = 0;
+		sendPresence(false);
 	}
 
 	function removePeer(id) {

@@ -6,12 +6,15 @@ import com.baselet.gwt.client.view.utils.StartupDiagramLoader;
 import com.web.gwt.client.collab.CollabBridge;
 import com.google.gwt.http.client.*;
 import com.google.gwt.user.client.Window;
+import com.google.gwt.user.client.ui.RootLayoutPanel;
 
 public class WebStartupDiagramLoader implements StartupDiagramLoader {
 
     @Override
     public void loadDiagram(MainView mainView) {
         new CollabBridge(mainView).export();
+        // lets the host page reserve space above the editor (project tab bar, see projectbar.js)
+        RootLayoutPanel.get().getElement().setId("umlet-root");
 
         // if uxf parameter is set, a GET request is made to get and load the diagram from the specified URL
         String urlOrUxf = Window.Location.getParameter("uxf");

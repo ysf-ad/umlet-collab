@@ -1,5 +1,6 @@
 // Assembles dist/ (served by server.js locally and by Cloudflare Workers Static Assets in production):
-//   - umlet-web/src/main/webapp/* (umletino.html becomes index.html, the umletino.com landing page is skipped)
+//   - umlet-web/src/main/webapp/* (projects.html becomes the landing page index.html, the editor umletino.html
+//     becomes app.html; the original umletino.com index.html is skipped)
 //   - the GWT-compiled app from umlet-web/target/umlet-web-<version>/umletweb (run the Maven build first)
 //   - vendor/yjs.js: Yjs bundled as a browser global (window.Y) for collab.js
 import fs from 'node:fs';
@@ -27,10 +28,11 @@ for (const entry of fs.readdirSync(dist)) fs.rmSync(path.join(dist, entry), { re
 const webapp = path.join(web, 'src', 'main', 'webapp');
 for (const entry of fs.readdirSync(webapp)) {
 	if (entry === 'WEB-INF' || entry === 'index.html') continue;
-	fs.cpSync(path.join(webapp, entry), path.join(dist, entry === 'umletino.html' ? 'index.html' : entry), { recursive: true });
+	const renamed = { 'umletino.html': 'app.html', 'projects.html': 'index.html' };
+	fs.cpSync(path.join(webapp, entry), path.join(dist, renamed[entry] || entry), { recursive: true });
 }
-const index = path.join(dist, 'index.html');
-fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace('${build.time.urlsafe}', Date.now().toString(36)));
+const app = path.join(dist, 'app.html');
+fs.writeFileSync(app, fs.readFileSync(app, 'utf8').replace('${build.time.urlsafe}', Date.now().toString(36)));
 fs.cpSync(gwtOut, path.join(dist, 'umletweb'), { recursive: true });
 
 await esbuild.build({

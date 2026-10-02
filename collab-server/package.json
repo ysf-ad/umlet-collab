@@ -1,0 +1,9 @@
+{
+  "name": "umletino-collab-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}

@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@shoelace-style/shoelace": "^2.20.1",
     "ws": "^8.18.0",
     "yjs": "^13.6.33"
   },

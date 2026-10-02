@@ -73,7 +73,7 @@ What runs where:
 | `umlet-web/.../file/WebFileChangeNotifier.java` | GWT → JS change notifications |
 | `umlet-web/.../view/WebDrawPanelDiagram.java` | announces whole-diagram replacement (import, `?uxf=`) |
 | `umlet-gwt/.../view/DrawPanel.java`, `DrawPanelDiagram.java` | drag/redraw notifications, view-change hooks |
-| `umlet-web/src/main/webapp/projectbar.js` | project tab bar (add/rename/reorder/delete diagrams, who is where) |
+| `umlet-web/src/main/webapp/projectbar.js` | project tab bar (add/rename/reorder/delete/restore diagrams, project switcher, who is where, light/dark), built with [Shoelace](https://shoelace.style) components |
 | `umlet-web/src/main/webapp/projects.html` | landing page: project list, create/delete projects |
 | `collab-server/src/room.js` | room state and merge rules (shared by both servers) |
 | `collab-server/src/project.js` | project and directory logic (shared by both servers) |

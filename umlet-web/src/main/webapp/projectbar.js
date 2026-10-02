@@ -3,9 +3,10 @@
 // either the user is sent to the project list.
 //
 // A project is a list of diagrams; each diagram is its own collaborative room "<projectId>/<diagramId>".
-// The bar shows one tab per diagram, live for everyone in the project: add (+), rename (double click),
-// delete (x), reorder (drag), restore deleted diagrams (Deleted menu). Switching tabs swaps the room in place
-// via umletCollab.switchRoom().
+// The tabs are live for everyone in the project: add (+), rename (double click), delete (x), reorder (drag),
+// restore deleted diagrams (Deleted menu). Switching tabs swaps the room in place via umletCollab.switchRoom().
+// Controls are Shoelace components (vendor/shoelace, bundled by collab-server/scripts/build.js); the tabs are
+// styled with Shoelace's design tokens so light and dark mode follow its themes.
 // Server side: Project Durable Object (collab-server/src/worker.js) / Node relay, logic in src/project.js.
 (function () {
 	var params = new URLSearchParams(location.search);
@@ -16,73 +17,93 @@
 		return;
 	}
 
-	var BAR_HEIGHT = 36;
+	var BAR_HEIGHT = 40;
 	var ws = null;
-	var project = null;     // {id, name, diagrams: [{id, name}]}
-	var viewers = [];       // [{id, diagram, name, color}]
-	var you = null;         // own id on the project connection
+	var project = null;       // {id, name, diagrams: [{id, name}], trash: [{id, name, deletedAt}]}
+	var viewers = [];         // [{id, diagram, name, color}]
+	var you = null;           // own id on the project connection
 	var current = params.get('diagram');
 	var requestCounter = 0;
-	var pendingAdd = null;  // requestId of the diagram we created, to switch to it
+	var pendingAdd = null;    // requestId of the diagram we created, to switch to it
 	var pendingRename = null; // id of the diagram we created: rename it inline as soon as its tab exists
 	var pendingSwitch = null; // id of a diagram we restored: switch to it as soon as its tab exists
 
+	function el(tag, attrs, children) {
+		var e = document.createElement(tag);
+		Object.keys(attrs || {}).forEach(function (k) {
+			if (k === 'text') e.textContent = attrs[k];
+			else if (k === 'className') e.className = attrs[k];
+			else e.setAttribute(k, attrs[k]);
+		});
+		(children || []).forEach(function (c) { e.appendChild(c); });
+		return e;
+	}
+	function icon(name, slot) { return el('sl-icon', slot ? { name: name, slot: slot } : { name: name }); }
+	function tooltip(content, child) { return el('sl-tooltip', { content: content, hoist: '' }, [child]); }
+
 	// ---- DOM ------------------------------------------------------------------------
-	var bar = document.createElement('div');
-	bar.id = 'projectbar';
-	bar.innerHTML =
-		'<a class="pb-home" href="./" title="All projects">&#9664; Projects</a>' +
-		'<button class="pb-project" title="Switch, create or rename projects" aria-haspopup="true" aria-expanded="false"><span class="pb-project-name"></span> &#9662;</button>' +
-		'<div class="pb-tabs" role="tablist"></div>' +
-		'<button class="pb-add" title="New diagram" aria-label="New diagram">+</button>' +
-		'<div class="pb-spacer"></div>' +
-		'<button class="pb-trash" title="Restore deleted diagrams" aria-haspopup="true" aria-expanded="false" hidden></button>' +
-		'<span class="pb-status"></span>' +
-		'<button class="pb-theme" title="Switch between light and dark mode" aria-label="Switch between light and dark mode"></button>' +
-		'<button class="pb-me" title="Change your display name"></button>' +
-		'<button class="pb-share" title="Copy a link to this diagram">Copy link</button>';
-	var tabsEl = bar.querySelector('.pb-tabs');
-	var projectButton = bar.querySelector('.pb-project');
-	var projectEl = bar.querySelector('.pb-project-name');
-	var projectMenu = document.createElement('div');
-	projectMenu.className = 'pb-menu';
-	projectMenu.hidden = true;
-	var statusEl = bar.querySelector('.pb-status');
-	var meEl = bar.querySelector('.pb-me');
-	var themeEl = bar.querySelector('.pb-theme');
-	var trashEl = bar.querySelector('.pb-trash');
-	var trashMenu = document.createElement('div');
-	trashMenu.className = 'pb-menu';
-	trashMenu.hidden = true;
-	var toast = document.createElement('div');
-	toast.id = 'pb-toast';
+	var homeButton = el('sl-button', { variant: 'text', size: 'small', href: './', className: 'pb-home' }, [icon('chevron-left', 'prefix'), document.createTextNode('Projects')]);
+
+	var projectNameEl = el('span', { className: 'pb-project-name' });
+	var projectButton = el('sl-button', { slot: 'trigger', variant: 'text', size: 'small', caret: '', className: 'pb-project', title: 'Switch, create or rename projects' }, [projectNameEl]);
+	var projectMenu = el('sl-menu', { className: 'pb-project-menu' });
+	var projectDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-start' }, [projectButton, projectMenu]);
+
+	var tabsEl = el('div', { className: 'pb-tabs', role: 'tablist' });
+	var addButton = tooltip('New diagram', el('sl-icon-button', { name: 'plus-lg', label: 'New diagram', className: 'pb-add' }));
+
+	var trashButton = el('sl-button', { slot: 'trigger', variant: 'text', size: 'small', caret: '' }, [icon('trash3', 'prefix'), el('span', { className: 'pb-trash-label' })]);
+	var trashMenu = el('sl-menu');
+	var trashDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-end', className: 'pb-trash' }, [trashButton, trashMenu]);
+
+	var statusEl = el('span', { className: 'pb-status' });
+	var themeIcon = el('sl-icon-button', { name: 'moon', label: 'Dark mode' });
+	var themeTooltip = tooltip('Dark mode', themeIcon);
+	var meDot = el('span', { className: 'pb-dot', slot: 'prefix' });
+	var meLabel = el('span');
+	var meButton = tooltip('Change your display name', el('sl-button', { variant: 'text', size: 'small', className: 'pb-me' }, [meDot, meLabel]));
+	var shareButton = el('sl-button', { size: 'small', className: 'pb-share' }, [icon('link-45deg', 'prefix'), document.createTextNode('Copy link')]);
+
+	var bar = el('div', { id: 'projectbar' }, [
+		homeButton,
+		el('div', { className: 'pb-sep' }),
+		projectDropdown,
+		tabsEl,
+		addButton,
+		el('div', { className: 'pb-spacer' }),
+		statusEl,
+		trashDropdown,
+		themeTooltip,
+		meButton,
+		shareButton
+	]);
+	var toast = el('div', { id: 'pb-toast', role: 'status' });
 
 	function mount() {
 		document.body.appendChild(bar);
 		document.body.appendChild(toast);
-		document.body.appendChild(trashMenu);
-		document.body.appendChild(projectMenu);
 		document.body.classList.add('has-projectbar');
-		applyBarTheme(typeof theme !== 'undefined' ? theme : 'LIGHT'); // set by the host page
-		window.dispatchEvent(new Event('resize')); // GWT re-lays out below the bar
-		renderMe();
 		if (standalone) {
 			document.body.classList.add('pb-standalone');
-			projectEl.textContent = 'Standalone diagram';
+			projectNameEl.textContent = 'Standalone diagram';
 		}
+		applyBarTheme(typeof theme !== 'undefined' ? theme : 'LIGHT'); // set by the host page
+		renderMe();
+		window.dispatchEvent(new Event('resize')); // GWT re-lays out below the bar
 	}
 	if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
 
-	// light/dark: the host page owns the theme (window.setAppTheme), the bar follows it
+	// ---- theme: the host page owns it (window.setAppTheme), the bar follows ----------------
 	function applyBarTheme(t) {
 		var dark = t === 'DARK';
-		document.body.classList.toggle('pb-dark', dark);
-		document.body.classList.toggle('pb-light', !dark);
-		themeEl.textContent = dark ? '☀ Light' : '☾ Dark';
+		document.documentElement.classList.toggle('sl-theme-dark', dark);
+		themeIcon.setAttribute('name', dark ? 'sun' : 'moon');
+		themeIcon.setAttribute('label', dark ? 'Light mode' : 'Dark mode');
+		themeTooltip.setAttribute('content', dark ? 'Light mode' : 'Dark mode');
 	}
 	window.addEventListener('umlet-theme', function (e) { applyBarTheme(e.detail); });
-	themeEl.addEventListener('click', function () {
-		window.setAppTheme(document.body.classList.contains('pb-dark') ? 'LIGHT' : 'DARK');
+	themeIcon.addEventListener('click', function () {
+		window.setAppTheme(document.documentElement.classList.contains('sl-theme-dark') ? 'LIGHT' : 'DARK');
 	});
 
 	var toastTimer;
@@ -140,7 +161,7 @@
 		}
 		var previous = project;
 		project = p;
-		projectEl.textContent = p.name;
+		projectNameEl.textContent = p.name;
 		document.body.classList.remove('pb-missing'); // the project may have been restored
 		var missing = document.getElementById('pb-missing');
 		if (missing) missing.remove();
@@ -171,9 +192,10 @@
 
 	function showMissing() {
 		document.body.classList.add('pb-missing');
-		var box = document.getElementById('pb-missing') || document.body.appendChild(document.createElement('div'));
-		box.id = 'pb-missing';
-		box.innerHTML = '<p>This project doesn’t exist or was deleted.</p><a href="./">Go to all projects</a>';
+		var box = document.getElementById('pb-missing') || document.body.appendChild(el('div', { id: 'pb-missing' }));
+		box.innerHTML = '';
+		box.appendChild(el('p', { text: 'This project doesn’t exist or was deleted.' }));
+		box.appendChild(el('sl-button', { variant: 'primary', href: './' }, [document.createTextNode('Go to all projects')]));
 	}
 
 	// ---- diagrams -------------------------------------------------------------------
@@ -199,7 +221,7 @@
 	}
 
 	function updateTitle() {
-		if (project) document.title = diagramName(current) + ' – ' + project.name + ' – UMLetino';
+		if (project) document.title = diagramName(current) + ' – ' + project.name + ' – UMLet';
 	}
 
 	window.addEventListener('popstate', function () {
@@ -207,7 +229,7 @@
 		if (id && project && id !== current) switchTo(id, false);
 	});
 
-	// ---- rendering ------------------------------------------------------------------
+	// ---- tabs -----------------------------------------------------------------------
 	var activeEdit = null; // {input, finish} of the inline rename in progress
 
 	function renderTabs() {
@@ -220,39 +242,29 @@
 		}
 		tabsEl.innerHTML = '';
 		project.diagrams.forEach(function (d, index) {
-			var tab = document.createElement('div');
-			tab.className = 'pb-tab' + (d.id === current ? ' active' : '');
-			tab.setAttribute('role', 'tab');
-			tab.setAttribute('aria-selected', d.id === current);
-			tab.draggable = true;
+			var active = d.id === current;
+			var tab = el('div', { className: 'pb-tab' + (active ? ' active' : ''), role: 'tab', 'aria-selected': String(active), draggable: 'true', title: d.name + '\nDouble-click to rename, drag to reorder' });
 			tab.dataset.id = d.id;
-			tab.title = d.name + ' (double-click to rename, drag to reorder)';
+			tab.appendChild(el('span', { className: 'pb-tab-name', text: d.name }));
 
-			var name = document.createElement('span');
-			name.className = 'pb-tab-name';
-			name.textContent = d.name;
-			tab.appendChild(name);
-
-			var dots = document.createElement('span');
-			dots.className = 'pb-dots';
-			viewers.filter(function (v) { return v.diagram === d.id && v.id !== you; }).forEach(function (v) {
-				var dot = document.createElement('span');
-				dot.className = 'pb-dot';
-				dot.style.background = v.color;
-				dot.title = v.name;
-				dots.appendChild(dot);
-			});
-			tab.appendChild(dots);
+			var others = viewers.filter(function (v) { return v.diagram === d.id && v.id !== you; });
+			if (others.length) {
+				var people = el('span', { className: 'pb-people' });
+				others.slice(0, 4).forEach(function (v) {
+					var initials = v.name.split(/\s+/).map(function (w) { return w[0]; }).join('').slice(0, 2).toUpperCase();
+					var avatar = el('span', { className: 'pb-avatar', title: v.name, text: initials });
+					avatar.style.background = v.color;
+					people.appendChild(avatar);
+				});
+				if (others.length > 4) people.appendChild(el('span', { className: 'pb-avatar pb-more', text: '+' + (others.length - 4) }));
+				tab.appendChild(people);
+			}
 
 			if (project.diagrams.length > 1) {
-				var close = document.createElement('button');
-				close.className = 'pb-close';
-				close.title = 'Delete diagram';
-				close.setAttribute('aria-label', 'Delete ' + d.name);
-				close.textContent = '×';
+				var close = el('sl-icon-button', { name: 'x-lg', label: 'Delete ' + d.name, className: 'pb-close' });
 				close.addEventListener('click', function (e) {
 					e.stopPropagation();
-					if (confirm('Delete "' + d.name + '" for everyone in this project?')) send({ t: 'remove', id: d.id });
+					if (confirm('Delete "' + d.name + '" for everyone in this project?\nYou can restore it from the Deleted menu.')) send({ t: 'remove', id: d.id });
 				});
 				tab.appendChild(close);
 			}
@@ -271,149 +283,14 @@
 			});
 			tabsEl.appendChild(tab);
 		});
-		var active = tabsEl.querySelector('.active');
-		if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-	}
-
-	function ago(time) {
-		var m = Math.round((Date.now() - time) / 60000);
-		if (m < 1) return 'just now';
-		if (m < 60) return m + ' min ago';
-		if (m < 60 * 24) return Math.round(m / 60) + ' h ago';
-		return Math.round(m / 60 / 24) + ' days ago';
-	}
-
-	// "Deleted (n)" menu: deleted diagrams keep their content and can be restored by anyone
-	function renderTrash() {
-		var trash = (project && project.trash) || [];
-		trashEl.hidden = trash.length === 0;
-		trashEl.textContent = 'Deleted (' + trash.length + ')';
-		if (!trash.length) closeTrash();
-		trashMenu.innerHTML = '';
-		trash.forEach(function (d) {
-			var row = document.createElement('div');
-			row.className = 'pb-trash-row';
-			var label = document.createElement('div');
-			label.className = 'pb-trash-label';
-			var name = document.createElement('div');
-			name.textContent = d.name;
-			var when = document.createElement('div');
-			when.className = 'pb-trash-when';
-			when.textContent = d.deletedAt ? 'deleted ' + ago(d.deletedAt) : 'deleted';
-			label.appendChild(name);
-			label.appendChild(when);
-			var button = document.createElement('button');
-			button.textContent = 'Restore';
-			button.setAttribute('aria-label', 'Restore ' + d.name);
-			button.addEventListener('click', function () {
-				send({ t: 'restore', id: d.id });
-				closeTrash();
-			});
-			row.appendChild(label);
-			row.appendChild(button);
-			trashMenu.appendChild(row);
-		});
-	}
-
-	// ---- dropdown menus (Deleted, project switcher) ------------------------------------
-	var menus = [];
-	function dropdown(button, menu, alignRight, onOpen) {
-		var m = {
-			open: function () {
-				menus.forEach(function (other) { if (other !== m) other.close(); });
-				if (onOpen) onOpen();
-				var r = button.getBoundingClientRect();
-				menu.style.top = (r.bottom + 4) + 'px';
-				menu.style.left = alignRight ? '' : Math.max(8, r.left) + 'px';
-				menu.style.right = alignRight ? Math.max(8, window.innerWidth - r.right) + 'px' : '';
-				menu.hidden = false;
-				button.setAttribute('aria-expanded', 'true');
-			},
-			close: function () {
-				menu.hidden = true;
-				button.setAttribute('aria-expanded', 'false');
-			}
-		};
-		button.addEventListener('click', function (e) {
-			e.stopPropagation();
-			if (menu.hidden) m.open(); else m.close();
-		});
-		menus.push(m);
-		return m;
-	}
-	document.addEventListener('mousedown', function (e) {
-		var inside = e.target.closest && e.target.closest('.pb-menu, .pb-trash, .pb-project');
-		if (!inside) menus.forEach(function (m) { m.close(); });
-	}, true);
-	document.addEventListener('keydown', function (e) { if (e.key === 'Escape') menus.forEach(function (m) { m.close(); }); });
-
-	var trashDropdown = dropdown(trashEl, trashMenu, true, renderTrash);
-	function closeTrash() { trashDropdown.close(); }
-
-	// project switcher: every project, plus create / rename / all projects
-	function menuItem(label, onClick) {
-		var item = document.createElement('button');
-		item.className = 'pb-menu-item';
-		item.textContent = label;
-		item.addEventListener('click', function () { projectDropdown.close(); onClick(); });
-		projectMenu.appendChild(item);
-	}
-	function renderProjectMenu() {
-		projectMenu.innerHTML = '<div class="pb-menu-title">Projects</div><div class="pb-menu-list"><div class="pb-menu-hint">Loading\u2026</div></div><div class="pb-menu-sep"></div>';
-		menuItem('+ New project\u2026', createProject);
-		if (!standalone) menuItem('Rename this project\u2026', renameProject);
-		menuItem('All projects', function () { location.href = './'; });
-		fetch('api/projects', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (list) {
-			var box = projectMenu.querySelector('.pb-menu-list');
-			box.innerHTML = '';
-			if (!list.length) box.innerHTML = '<div class="pb-menu-hint">No projects yet</div>';
-			list.forEach(function (p) {
-				var a = document.createElement('a');
-				a.className = 'pb-menu-item' + (p.id === projectId ? ' current' : '');
-				a.href = 'app?project=' + encodeURIComponent(p.id);
-				var name = document.createElement('span');
-				name.className = 'pb-menu-name';
-				name.textContent = (p.id === projectId ? '\u2713 ' : '') + p.name;
-				var count = document.createElement('span');
-				count.className = 'pb-menu-count';
-				count.textContent = p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams');
-				a.appendChild(name);
-				a.appendChild(count);
-				box.appendChild(a);
-			});
-		}).catch(function () {
-			projectMenu.querySelector('.pb-menu-list').innerHTML = '<div class="pb-menu-hint">Couldn\u2019t load projects</div>';
-		});
-	}
-	var projectDropdown = dropdown(projectButton, projectMenu, false, renderProjectMenu);
-
-	function createProject() {
-		var name = prompt('Name of the new project:', '');
-		if (name === null) return;
-		fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) })
-			.then(function (r) { return r.json(); })
-			.then(function (p) { location.href = 'app?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
-			.catch(function () { showToast('Couldn\u2019t create the project. Try again.'); });
-	}
-	function renameProject() {
-		if (project) inlineEdit(projectEl, project.name, function (name) { send({ t: 'renameProject', name: name }); });
-	}
-
-	function renderMe() {
-		meEl.innerHTML = '';
-		var dot = document.createElement('span');
-		dot.className = 'pb-dot';
-		dot.style.background = umletCollab.me.color;
-		meEl.appendChild(dot);
-		meEl.appendChild(document.createTextNode(' ' + umletCollab.me.name));
+		var activeTab = tabsEl.querySelector('.active');
+		if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}
 
 	// inline editing for diagram and project names
 	function inlineEdit(target, value, onCommit) {
-		var input = document.createElement('input');
-		input.className = 'pb-input';
+		var input = el('input', { className: 'pb-input', maxlength: '80', 'aria-label': 'Name' });
 		input.value = value;
-		input.maxLength = 80;
 		target.textContent = '';
 		target.appendChild(input);
 		var done = false;
@@ -457,17 +334,94 @@
 		if (tab) inlineEdit(tab, diagramName(id), function (name) { send({ t: 'rename', id: id, name: name }); });
 	}
 
-	// ---- controls -------------------------------------------------------------------
-	bar.querySelector('.pb-add').addEventListener('click', function () {
+	addButton.querySelector('sl-icon-button').addEventListener('click', function () {
 		pendingAdd = 'r' + (++requestCounter) + Date.now();
 		send({ t: 'add', requestId: pendingAdd });
 	});
-	projectButton.addEventListener('dblclick', function (e) {
-		e.preventDefault();
-		projectDropdown.close();
-		renameProject();
+
+	// ---- Deleted menu: deleted diagrams keep their content and can be restored by anyone ------
+	function ago(time) {
+		var m = Math.round((Date.now() - time) / 60000);
+		if (m < 1) return 'just now';
+		if (m < 60) return m + ' min ago';
+		if (m < 60 * 24) return Math.round(m / 60) + ' h ago';
+		return Math.round(m / 60 / 24) + ' days ago';
+	}
+
+	function renderTrash() {
+		var trash = (project && project.trash) || [];
+		trashDropdown.hidden = trash.length === 0;
+		trashButton.querySelector('.pb-trash-label').textContent = 'Deleted (' + trash.length + ')';
+		trashMenu.innerHTML = '';
+		trashMenu.appendChild(el('sl-menu-label', { text: 'Restore a deleted diagram' }));
+		trash.forEach(function (d) {
+			var item = el('sl-menu-item', { value: d.id }, [
+				icon('arrow-counterclockwise', 'prefix'),
+				document.createTextNode(d.name),
+				el('span', { slot: 'suffix', className: 'pb-menu-hint', text: d.deletedAt ? ago(d.deletedAt) : '' })
+			]);
+			trashMenu.appendChild(item);
+		});
+	}
+	trashMenu.addEventListener('sl-select', function (e) {
+		send({ t: 'restore', id: e.detail.item.value });
 	});
-	meEl.addEventListener('click', function () {
+
+	// ---- project switcher -----------------------------------------------------------
+	function renderProjectMenu() {
+		projectMenu.innerHTML = '';
+		projectMenu.appendChild(el('sl-menu-label', { text: 'Projects' }));
+		var loading = el('sl-menu-item', { disabled: '' }, [el('sl-spinner', { slot: 'prefix' }), document.createTextNode('Loading…')]);
+		projectMenu.appendChild(loading);
+		projectMenu.appendChild(el('sl-divider'));
+		projectMenu.appendChild(el('sl-menu-item', { value: '__new' }, [icon('plus-lg', 'prefix'), document.createTextNode('New project…')]));
+		if (!standalone) projectMenu.appendChild(el('sl-menu-item', { value: '__rename' }, [icon('pencil', 'prefix'), document.createTextNode('Rename this project…')]));
+		projectMenu.appendChild(el('sl-menu-item', { value: '__all' }, [icon('grid', 'prefix'), document.createTextNode('All projects')]));
+		fetch('api/projects', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (list) {
+			var items = list.map(function (p) {
+				var isCurrent = p.id === projectId;
+				return el('sl-menu-item', { value: p.id }, [
+					icon(isCurrent ? 'check2' : 'folder2', 'prefix'),
+					document.createTextNode(p.name),
+					el('span', { slot: 'suffix', className: 'pb-menu-hint', text: String(p.diagrams) })
+				]);
+			});
+			if (!items.length) items = [el('sl-menu-item', { disabled: '' }, [document.createTextNode('No projects yet')])];
+			items.forEach(function (item) { projectMenu.insertBefore(item, loading); });
+			loading.remove();
+		}).catch(function () {
+			loading.replaceChildren(document.createTextNode('Couldn’t load projects'));
+		});
+	}
+	projectDropdown.addEventListener('sl-show', renderProjectMenu);
+	projectMenu.addEventListener('sl-select', function (e) {
+		var value = e.detail.item.value;
+		if (value === '__new') createProject();
+		else if (value === '__rename') setTimeout(renameProject, 0);
+		else if (value === '__all') location.href = './';
+		else if (value && value !== projectId) location.href = 'app?project=' + encodeURIComponent(value);
+	});
+
+	function createProject() {
+		var name = prompt('Name of the new project:', '');
+		if (name === null) return;
+		fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) })
+			.then(function (r) { return r.json(); })
+			.then(function (p) { location.href = 'app?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
+			.catch(function () { showToast('Couldn’t create the project. Try again.'); });
+	}
+	function renameProject() {
+		if (!project) return;
+		var name = prompt('Rename this project:', project.name);
+		if (name && name.trim() && name.trim() !== project.name) send({ t: 'renameProject', name: name.trim() });
+	}
+
+	// ---- you, sharing ---------------------------------------------------------------
+	function renderMe() {
+		meDot.style.background = umletCollab.me.color;
+		meLabel.textContent = umletCollab.me.name;
+	}
+	meButton.querySelector('sl-button').addEventListener('click', function () {
 		var name = prompt('Your display name (shown to others):', umletCollab.me.name);
 		if (name && name.trim()) {
 			umletCollab.setName(name);
@@ -475,70 +429,52 @@
 			announce();
 		}
 	});
-	bar.querySelector('.pb-share').addEventListener('click', function () {
-		var button = this;
-		var done = function () { button.textContent = 'Copied'; setTimeout(function () { button.textContent = 'Copy link'; }, 1500); };
+	shareButton.addEventListener('click', function () {
+		var done = function () { showToast('Link copied'); };
 		if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done, function () { prompt('Copy this link:', location.href); });
 		else prompt('Copy this link:', location.href);
 	});
 
-	// ---- styles ---------------------------------------------------------------------
+	// ---- styles: Shoelace design tokens, so light and dark follow its themes ----------------
 	var style = document.createElement('style');
 	style.textContent = [
 		'body.has-projectbar #umlet-root{top:' + BAR_HEIGHT + 'px !important}',
-		'body.pb-light{--pb-bg:#f3f4f6;--pb-fg:#1f2328;--pb-muted:#656d76;--pb-tab:#e5e7eb;--pb-active:#ffffff;--pb-border:#d0d7de;--pb-accent:#2563eb}',
-		'body.pb-dark{--pb-bg:#1b1d21;--pb-fg:#e6e6e6;--pb-muted:#9aa0a6;--pb-tab:#2a2d33;--pb-active:#000000;--pb-border:#3a3d44;--pb-accent:#6ea8fe}',
-		'#projectbar{position:fixed;left:0;right:0;top:0;height:' + BAR_HEIGHT + 'px;display:flex;align-items:flex-end;gap:6px;padding:0 8px;box-sizing:border-box;background:var(--pb-bg);color:var(--pb-fg);border-bottom:1px solid var(--pb-border);font:13px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;z-index:1000;user-select:none}',
-		'#projectbar button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}',
-		'#projectbar .pb-home{align-self:center;color:var(--pb-muted);text-decoration:none;white-space:nowrap;padding:4px 6px;border-radius:6px}',
-		'#projectbar .pb-home:hover{background:var(--pb-tab);color:var(--pb-fg)}',
-		'#projectbar .pb-project{align-self:center;font-weight:600;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;border-radius:6px}',
-		'#projectbar .pb-project:hover,#projectbar .pb-project[aria-expanded=true]{background:var(--pb-tab)}',
-		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
-		'body.pb-standalone #projectbar .pb-project{font-weight:400;color:var(--pb-muted)}',
-		'#projectbar .pb-tabs{display:flex;align-items:flex-end;align-self:stretch;gap:2px;overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:none}',
-		'#projectbar .pb-tab{display:flex;align-items:center;gap:6px;height:29px;padding:0 6px 0 12px;background:var(--pb-tab);border:1px solid var(--pb-border);border-bottom:0;border-radius:7px 7px 0 0;cursor:pointer;white-space:nowrap;max-width:220px;color:var(--pb-muted)}',
-		'#projectbar .pb-tab:hover{color:var(--pb-fg)}',
-		'#projectbar .pb-tab.active{background:var(--pb-active);color:var(--pb-fg);height:31px;box-shadow:inset 0 2px 0 var(--pb-accent)}',
+		'#projectbar{position:fixed;left:0;right:0;top:0;height:' + BAR_HEIGHT + 'px;display:flex;align-items:center;gap:var(--sl-spacing-2x-small);padding:0 var(--sl-spacing-x-small);box-sizing:border-box;background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-900);border-bottom:1px solid var(--sl-color-neutral-200);font-family:var(--sl-font-sans);font-size:var(--sl-font-size-small);z-index:1000;user-select:none}',
+		'#projectbar .pb-sep{width:1px;height:20px;background:var(--sl-color-neutral-200);margin:0 var(--sl-spacing-2x-small)}',
+		'#projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-semibold);max-width:220px;overflow:hidden;text-overflow:ellipsis}',
+		'#projectbar .pb-tabs{position:relative;z-index:0;display:flex;align-items:stretch;align-self:stretch;gap:2px;margin-left:var(--sl-spacing-x-small);overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:none}',
+		'#projectbar sl-button[variant=text]::part(base){color:var(--sl-color-neutral-700)}',
+		'#projectbar sl-button[variant=text]::part(base):hover{color:var(--sl-color-neutral-900);background:var(--sl-color-neutral-100)}',
+		'#projectbar sl-icon-button::part(base){color:var(--sl-color-neutral-600)}',
+		'#projectbar sl-icon-button::part(base):hover{color:var(--sl-color-neutral-900)}',
+		'#projectbar .pb-tab{position:relative;display:flex;align-items:center;gap:6px;max-width:220px;padding:0 var(--sl-spacing-2x-small) 0 var(--sl-spacing-small);color:var(--sl-color-neutral-600);cursor:pointer;white-space:nowrap}',
+		'#projectbar .pb-tab::before{content:"";position:absolute;inset:6px 0;border-radius:var(--sl-border-radius-medium);z-index:-1}',
+		'#projectbar .pb-tab:hover{color:var(--sl-color-neutral-900)}',
+		'#projectbar .pb-tab:hover::before{background:var(--sl-color-neutral-100)}',
+		'#projectbar .pb-tab.active{color:var(--sl-color-neutral-900);font-weight:var(--sl-font-weight-semibold)}',
+		'#projectbar .pb-tab.active::after{content:"";position:absolute;left:var(--sl-spacing-x-small);right:var(--sl-spacing-x-small);bottom:0;height:2px;border-radius:2px;background:var(--sl-color-neutral-900)}',
 		'#projectbar .pb-tab.dragging{opacity:.5}',
-		'#projectbar .pb-tab.drop-target{box-shadow:inset 3px 0 0 var(--pb-accent)}',
-		'#projectbar .pb-tab-name{overflow:hidden;text-overflow:ellipsis}',
-		'#projectbar .pb-close{width:18px;height:18px;line-height:16px;border-radius:4px;color:var(--pb-muted);visibility:hidden;font-size:15px}',
-		'#projectbar .pb-tab:hover .pb-close,#projectbar .pb-tab.active .pb-close{visibility:visible}',
-		'#projectbar .pb-close:hover{background:var(--pb-border);color:var(--pb-fg)}',
-		'#projectbar .pb-add{align-self:center;width:26px;height:26px;border-radius:6px;font-size:18px;color:var(--pb-muted)}',
-		'#projectbar .pb-add:hover,#projectbar .pb-me:hover,#projectbar .pb-share:hover{background:var(--pb-tab);color:var(--pb-fg)}',
+		'#projectbar .pb-tab.drop-target{box-shadow:inset 2px 0 0 var(--sl-color-primary-600)}',
+		'#projectbar .pb-tab-name{overflow:hidden;text-overflow:ellipsis;padding:var(--sl-spacing-2x-small) 0}',
+		'#projectbar .pb-close{font-size:11px;opacity:0}',
+		'#projectbar .pb-tab:hover .pb-close,#projectbar .pb-tab.active .pb-close,#projectbar .pb-close:focus-within{opacity:1}',
+		'#projectbar .pb-close::part(base){padding:4px}',
+		'#projectbar .pb-people{display:flex;padding-left:4px}',
+		'#projectbar .pb-avatar{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:-4px;border-radius:50%;border:2px solid var(--sl-color-neutral-50);color:#fff;font-size:9px;font-weight:var(--sl-font-weight-semibold);line-height:1}',
+		'#projectbar .pb-avatar.pb-more{background:var(--sl-color-neutral-500)}',
+		'#projectbar .pb-add{font-size:var(--sl-font-size-medium)}',
 		'#projectbar .pb-spacer{flex:1}',
-		'#projectbar .pb-status{align-self:center;color:var(--pb-muted)}',
-		'#projectbar .pb-me,#projectbar .pb-share,#projectbar .pb-trash,#projectbar .pb-theme{align-self:center;padding:4px 8px;border-radius:6px;white-space:nowrap}',
-		'#projectbar .pb-theme{color:var(--pb-muted)}',
-		'#projectbar .pb-theme:hover{background:var(--pb-tab);color:var(--pb-fg)}',
-		'#projectbar .pb-trash{color:var(--pb-muted)}',
-		'#projectbar .pb-trash:hover{background:var(--pb-tab);color:var(--pb-fg)}',
+		'#projectbar .pb-status{color:var(--sl-color-warning-700)}',
 		'#projectbar .pb-trash[hidden]{display:none}',
-		'.pb-menu{position:fixed;min-width:240px;max-width:340px;max-height:70vh;overflow-y:auto;background:var(--pb-active);color:var(--pb-fg);border:1px solid var(--pb-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:4px;font:13px system-ui,sans-serif;z-index:1002}',
-		'.pb-menu[hidden]{display:none}',
-		'.pb-menu-title{padding:6px 8px 4px;color:var(--pb-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}',
-		'.pb-menu-item{display:flex;justify-content:space-between;gap:12px;width:100%;box-sizing:border-box;padding:7px 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer}',
-		'.pb-menu-item:hover{background:var(--pb-bg)}',
-		'.pb-menu-item.current{font-weight:600}',
-		'.pb-menu-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-		'.pb-menu-count{color:var(--pb-muted);font-weight:400;white-space:nowrap}',
-		'.pb-menu-hint{padding:7px 8px;color:var(--pb-muted)}',
-		'.pb-menu-sep{height:1px;margin:4px 0;background:var(--pb-border)}',
-		'.pb-trash-row{display:flex;align-items:center;gap:12px;padding:6px 8px;border-radius:6px}',
-		'.pb-trash-row:hover{background:var(--pb-bg)}',
-		'.pb-trash-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-		'.pb-trash-when{color:var(--pb-muted);font-size:12px}',
-		'.pb-trash-row button{font:inherit;color:var(--pb-accent);background:none;border:1px solid var(--pb-border);border-radius:6px;padding:3px 8px;cursor:pointer}',
-		'#projectbar .pb-share{border:1px solid var(--pb-border) !important}',
-		'#projectbar .pb-dots{display:flex;gap:2px}',
-		'.pb-dot{display:inline-block;width:8px;height:8px;border-radius:50%}',
-		'#projectbar .pb-input{font:inherit;width:140px;padding:2px 4px;border:1px solid var(--pb-accent);border-radius:4px;background:var(--pb-active);color:var(--pb-fg);outline:none}',
-		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 10) + 'px;transform:translateX(-50%);background:#323232;color:#fff;padding:8px 14px;border-radius:6px;font:13px system-ui,sans-serif;opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001}',
+		'#projectbar .pb-dot{display:inline-block;width:10px;height:10px;border-radius:50%}',
+		'.pb-menu-hint{color:var(--sl-color-neutral-500);font-size:var(--sl-font-size-x-small)}',
+		'sl-menu{min-width:240px;max-width:340px;max-height:70vh;overflow-y:auto}',
+		'.pb-input{font:inherit;font-weight:var(--sl-font-weight-normal);width:150px;padding:2px 6px;border:1px solid var(--sl-color-primary-600);border-radius:var(--sl-border-radius-small);background:var(--sl-color-neutral-0);color:var(--sl-color-neutral-900);outline:none;box-shadow:0 0 0 2px var(--sl-color-primary-100)}',
+		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
+		'body.pb-standalone #projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-normal);color:var(--sl-color-neutral-600)}',
+		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 12) + 'px;transform:translateX(-50%);background:var(--sl-color-neutral-800);color:var(--sl-color-neutral-0);padding:var(--sl-spacing-x-small) var(--sl-spacing-medium);border-radius:var(--sl-border-radius-medium);font:var(--sl-font-size-small) var(--sl-font-sans);box-shadow:var(--sl-shadow-large);opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001}',
 		'#pb-toast.visible{opacity:1}',
-		'#pb-missing{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:var(--pb-bg);color:var(--pb-fg);font:15px system-ui,sans-serif;z-index:999}',
-		'#pb-missing a{color:var(--pb-accent)}',
+		'#pb-missing{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sl-spacing-medium);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-700);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:999}',
 		'body.pb-missing #projectbar .pb-add,body.pb-missing #projectbar .pb-share{display:none}'
 	].join('\n');
 	document.head.appendChild(style);

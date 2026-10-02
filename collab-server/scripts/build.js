@@ -36,7 +36,9 @@ const app = path.join(dist, 'app.html');
 const stamp = Date.now().toString(36);
 fs.writeFileSync(app, fs.readFileSync(app, 'utf8')
 	.replace('${build.time.urlsafe}', stamp)
-	.replace(/src="(vendor\/yjs\.js|collab\.js|projectbar\.js)"/g, 'src="$1?v=' + stamp + '"'));
+	.replace(/(src|href)="(vendor\/[^"?]+|collab\.js|projectbar\.js)"/g, '$1="$2?v=' + stamp + '"'));
+const index = path.join(dist, 'index.html');
+fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace(/(src|href)="(vendor\/[^"?]+)"/g, '$1="$2?v=' + stamp + '"'));
 fs.cpSync(gwtOut, path.join(dist, 'umletweb'), { recursive: true });
 
 await esbuild.build({
@@ -48,6 +50,24 @@ await esbuild.build({
 	outfile: path.join(dist, 'vendor', 'yjs.js'),
 	logLevel: 'warning',
 });
+
+// Shoelace (MIT) UI components for the project bar and project list: one bundle, two themes, the icons we use
+const SHOELACE_ICONS = ['chevron-left', 'chevron-down', 'plus-lg', 'x-lg', 'check2', 'pencil', 'grid', 'trash3', 'arrow-counterclockwise',
+	'sun', 'moon', 'link-45deg', 'folder2', 'person', 'search'];
+const shoelace = path.join(root, 'node_modules', '@shoelace-style', 'shoelace', 'dist');
+const shoelaceOut = path.join(dist, 'vendor', 'shoelace');
+await esbuild.build({
+	entryPoints: [path.join(root, 'scripts', 'shoelace-entry.js')],
+	bundle: true,
+	minify: true,
+	format: 'iife',
+	outfile: path.join(shoelaceOut, 'shoelace.js'),
+	logLevel: 'warning',
+});
+fs.mkdirSync(path.join(shoelaceOut, 'themes'), { recursive: true });
+for (const theme of ['light.css', 'dark.css']) fs.copyFileSync(path.join(shoelace, 'themes', theme), path.join(shoelaceOut, 'themes', theme));
+fs.mkdirSync(path.join(shoelaceOut, 'assets', 'icons'), { recursive: true });
+for (const icon of SHOELACE_ICONS) fs.copyFileSync(path.join(shoelace, 'assets', 'icons', icon + '.svg'), path.join(shoelaceOut, 'assets', 'icons', icon + '.svg'));
 
 let files = 0;
 (function check(dir) {

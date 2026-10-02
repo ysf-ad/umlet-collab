@@ -3,67 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Projects – UMLetino Collab</title>
+    <title>Projects – UMLet</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="umlet_logo32.png">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <script>
         // old links (?room=...) went to the editor directly
         if (new URLSearchParams(location.search).has('room')) location.replace('app.html' + location.search);
         // light by default; the choice is shared with the editor (same storage key)
-        try { if (localStorage.getItem('umletcollab.theme') === 'DARK') document.documentElement.dataset.theme = 'dark'; } catch (e) { /* light */ }
+        try { if (localStorage.getItem('umletcollab.theme') === 'DARK') document.documentElement.classList.add('sl-theme-dark'); } catch (e) { /* light */ }
     </script>
+    <link rel="stylesheet" href="vendor/shoelace/themes/light.css">
+    <link rel="stylesheet" href="vendor/shoelace/themes/dark.css">
+    <script src="vendor/shoelace/shoelace.js"></script>
     <style>
-        :root {
-            --bg: #f6f7f9; --card: #ffffff; --fg: #1f2328; --muted: #656d76; --border: #d0d7de;
-            --accent: #2563eb; --accent-fg: #ffffff; --danger: #cf222e; --hover: #eef1f5;
-        }
-        :root[data-theme="dark"] { --bg: #111317; --card: #1b1d21; --fg: #e6e6e6; --muted: #9aa0a6; --border: #33363c; --accent: #6ea8fe; --accent-fg: #0b1220; --danger: #ff7b72; --hover: #24272d; }
-        #theme { margin-left: auto; align-self: flex-start; font: inherit; font-size: 13px; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
-        #theme:hover { color: var(--fg); background: var(--hover); }
         * { box-sizing: border-box; }
-        body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-        main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
-        header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
-        header img { width: 36px; height: 36px; }
-        h1 { font-size: 22px; margin: 0; }
-        header p { margin: 0; color: var(--muted); font-size: 14px; }
-        form { display: flex; gap: 8px; margin-bottom: 24px; }
-        input { flex: 1; min-width: 0; font: inherit; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg); }
-        input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-        button.primary { font: inherit; font-weight: 600; padding: 9px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-fg); cursor: pointer; white-space: nowrap; }
-        .toolbar { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
-        ul { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-        li { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--border); }
+        body { margin: 0; background: var(--sl-color-neutral-50); color: var(--sl-color-neutral-900); font: var(--sl-font-size-medium)/1.5 var(--sl-font-sans); }
+        main { max-width: 760px; margin: 0 auto; padding: var(--sl-spacing-3x-large) var(--sl-spacing-medium) var(--sl-spacing-4x-large); }
+        header { display: flex; align-items: center; gap: var(--sl-spacing-medium); margin-bottom: var(--sl-spacing-x-large); }
+        header img { width: 40px; height: 40px; }
+        h1 { font-size: var(--sl-font-size-x-large); font-weight: var(--sl-font-weight-semibold); margin: 0; }
+        header p { margin: 0; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
+        header .spacer { flex: 1; }
+        form { display: flex; gap: var(--sl-spacing-x-small); margin-bottom: var(--sl-spacing-x-large); }
+        form sl-input { flex: 1; min-width: 0; }
+        .toolbar { display: flex; justify-content: space-between; margin-bottom: var(--sl-spacing-x-small); color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
+        ul { list-style: none; margin: 0; padding: 0; background: var(--sl-color-neutral-0); border: 1px solid var(--sl-color-neutral-200); border-radius: var(--sl-border-radius-large); overflow: hidden; }
+        li { display: flex; align-items: center; gap: var(--sl-spacing-small); padding-right: var(--sl-spacing-x-small); border-top: 1px solid var(--sl-color-neutral-200); }
         li:first-child { border-top: 0; }
-        li a { flex: 1; min-width: 0; display: block; padding: 12px 16px; color: inherit; text-decoration: none; }
-        li a:hover { background: var(--hover); }
-        .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .meta { color: var(--muted); font-size: 13px; }
-        li button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; margin-right: 12px; cursor: pointer; }
-        li button:hover { color: var(--danger); border-color: var(--border); }
-        .empty, .error { padding: 32px 16px; text-align: center; color: var(--muted); }
-        details { margin-top: 28px; }
-        summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 8px; }
-        #deleted .name { font-weight: 500; color: var(--muted); }
-        #deleted li > div { flex: 1; min-width: 0; padding: 10px 16px; }
-        #deleted li button { color: var(--accent); border-color: var(--border); }
-        #deleted li button:hover { color: var(--accent); background: var(--hover); }
-        .error { color: var(--danger); }
+        li a, li .info { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sl-spacing-small); padding: var(--sl-spacing-small) var(--sl-spacing-medium); color: inherit; text-decoration: none; }
+        li a:hover { background: var(--sl-color-neutral-50); }
+        li sl-icon.folder { font-size: var(--sl-font-size-large); color: var(--sl-color-neutral-500); flex: none; }
+        .name { font-weight: var(--sl-font-weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .meta { color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
+        .empty, .error { padding: var(--sl-spacing-2x-large) var(--sl-spacing-medium); text-align: center; color: var(--sl-color-neutral-600); justify-content: center; }
+        .error { color: var(--sl-color-danger-700); }
+        details { margin-top: var(--sl-spacing-2x-large); }
+        summary { cursor: pointer; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); margin-bottom: var(--sl-spacing-x-small); }
+        #deleted .name { font-weight: var(--sl-font-weight-normal); color: var(--sl-color-neutral-700); }
     </style>
 </head>
 <body>
 <main>
     <header>
-        <img src="UMLetino_logo_small.png" alt="">
+        <img src="umlet_logo64.png" alt="">
         <div>
-            <h1>UMLetino Collab</h1>
-            <p>Projects are shared with everyone who has the link. Each project holds several UML diagrams.</p>
+            <h1>UMLet projects</h1>
+            <p>Shared with everyone who has the link. Each project holds several UML diagrams that you edit together.</p>
         </div>
-        <button id="theme" type="button"></button>
+        <div class="spacer"></div>
+        <sl-tooltip id="theme-tip" content="Dark mode"><sl-icon-button id="theme" name="moon" label="Dark mode"></sl-icon-button></sl-tooltip>
     </header>
 
     <form id="create">
-        <input id="name" placeholder="New project name, e.g. Payment service" maxlength="80" aria-label="Project name">
-        <button class="primary" type="submit">Create project</button>
+        <sl-input id="name" placeholder="New project name, e.g. Payment service" maxlength="80" aria-label="Project name"></sl-input>
+        <sl-button variant="primary" type="submit"><sl-icon slot="prefix" name="plus-lg"></sl-icon>Create project</sl-button>
     </form>
 
     <div class="toolbar"><span id="count"></span><span>Sorted by last edit</span></div>
@@ -88,98 +81,99 @@
         return n + ' ' + units[i][1] + (n === 1 ? '' : 's') + ' ago';
     }
 
+    function el(tag, className, text) {
+        var e = document.createElement(tag);
+        if (className) e.className = className;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function row(p, deleted) {
+        var li = document.createElement('li');
+        var link = el(deleted ? 'div' : 'a', deleted ? 'info' : '');
+        if (!deleted) link.href = 'app.html?project=' + encodeURIComponent(p.id);
+        var folder = document.createElement('sl-icon');
+        folder.name = 'folder2';
+        folder.className = 'folder';
+        var text = el('div');
+        text.style.minWidth = '0';
+        text.appendChild(el('div', 'name', p.name));
+        text.appendChild(el('div', 'meta', p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + ' · ' + (deleted ? 'deleted ' + ago(p.deletedAt || p.updatedAt) : 'edited ' + ago(p.updatedAt))));
+        link.appendChild(folder);
+        link.appendChild(text);
+        li.appendChild(link);
+
+        var tip = document.createElement('sl-tooltip');
+        tip.content = deleted ? 'Restore project' : 'Delete project';
+        var button = document.createElement('sl-icon-button');
+        button.name = deleted ? 'arrow-counterclockwise' : 'trash3';
+        button.label = (deleted ? 'Restore project ' : 'Delete project ') + p.name;
+        button.addEventListener('click', function () {
+            if (deleted) {
+                fetch('api/projects/' + encodeURIComponent(p.id) + '/restore', { method: 'POST' }).then(load);
+            } else if (confirm('Delete the project "' + p.name + '" for everyone?\nYou can restore it from "Recently deleted".')) {
+                fetch('api/projects/' + encodeURIComponent(p.id), { method: 'DELETE' }).then(load);
+            }
+        });
+        tip.appendChild(button);
+        li.appendChild(tip);
+        return li;
+    }
+
     function render(projects) {
         list.innerHTML = '';
         count.textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
         if (!projects.length) {
-            list.innerHTML = '<li class="empty">No projects yet. Create the first one above.</li>';
+            list.appendChild(el('li', 'empty', 'No projects yet. Create the first one above.'));
             return;
         }
-        projects.forEach(function (p) {
-            var li = document.createElement('li');
-            var a = document.createElement('a');
-            a.href = 'app.html?project=' + encodeURIComponent(p.id);
-            var name = document.createElement('div');
-            name.className = 'name';
-            name.textContent = p.name;
-            var meta = document.createElement('div');
-            meta.className = 'meta';
-            meta.textContent = p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + ' · edited ' + ago(p.updatedAt);
-            a.appendChild(name);
-            a.appendChild(meta);
-            var del = document.createElement('button');
-            del.textContent = 'Delete';
-            del.setAttribute('aria-label', 'Delete project ' + p.name);
-            del.addEventListener('click', function () {
-                if (!confirm('Delete the project "' + p.name + '" for everyone?')) return;
-                fetch('api/projects/' + encodeURIComponent(p.id), { method: 'DELETE' }).then(load);
-            });
-            li.appendChild(a);
-            li.appendChild(del);
-            list.appendChild(li);
-        });
+        projects.forEach(function (p) { list.appendChild(row(p, false)); });
     }
 
     // deleted projects keep their diagrams and can be restored
     function renderDeleted(projects) {
-        var trash = document.getElementById('trash');
-        var deleted = document.getElementById('deleted');
-        trash.hidden = projects.length === 0;
+        document.getElementById('trash').hidden = projects.length === 0;
         document.getElementById('trash-summary').textContent = 'Recently deleted (' + projects.length + ')';
+        var deleted = document.getElementById('deleted');
         deleted.innerHTML = '';
-        projects.forEach(function (p) {
-            var li = document.createElement('li');
-            var info = document.createElement('div');
-            var name = document.createElement('div');
-            name.className = 'name';
-            name.textContent = p.name;
-            var meta = document.createElement('div');
-            meta.className = 'meta';
-            meta.textContent = p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + (p.deletedAt ? ' · deleted ' + ago(p.deletedAt) : '');
-            info.appendChild(name);
-            info.appendChild(meta);
-            var restore = document.createElement('button');
-            restore.textContent = 'Restore';
-            restore.setAttribute('aria-label', 'Restore project ' + p.name);
-            restore.addEventListener('click', function () {
-                restore.disabled = true;
-                fetch('api/projects/' + encodeURIComponent(p.id) + '/restore', { method: 'POST' }).then(load);
-            });
-            li.appendChild(info);
-            li.appendChild(restore);
-            deleted.appendChild(li);
-        });
+        projects.forEach(function (p) { deleted.appendChild(row(p, true)); });
     }
 
     function load() {
         fetch('api/projects', { cache: 'no-store' })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
             .then(render)
-            .catch(function () { list.innerHTML = '<li class="error">Couldn’t load projects. Try reloading the page.</li>'; });
+            .catch(function () { list.innerHTML = ''; list.appendChild(el('li', 'error', 'Couldn’t load projects. Try reloading the page.')); });
         fetch('api/projects?deleted=1', { cache: 'no-store' })
             .then(function (r) { return r.ok ? r.json() : []; })
             .then(renderDeleted)
             .catch(function () { /* the section just stays hidden */ });
     }
 
-    document.getElementById('create').addEventListener('submit', function (e) {
-        e.preventDefault();
-        var button = this.querySelector('button');
-        button.disabled = true;
+    var creating = false;
+    function create() {
+        if (creating) return;
+        creating = true;
+        var button = document.querySelector('#create sl-button');
+        button.loading = true;
         fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: document.getElementById('name').value }) })
             .then(function (r) { return r.json(); })
             .then(function (p) { location.href = 'app.html?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
-            .catch(function () { button.disabled = false; alert('Couldn’t create the project. Try again.'); });
-    });
+            .catch(function () { creating = false; button.loading = false; alert('Couldn’t create the project. Try again.'); });
+    }
+    document.getElementById('create').addEventListener('submit', function (e) { e.preventDefault(); create(); });
+    // Enter in the name field creates the project too
+    document.getElementById('name').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); create(); } });
 
     var themeButton = document.getElementById('theme');
+    var themeTip = document.getElementById('theme-tip');
     function showThemeButton() {
-        var dark = document.documentElement.dataset.theme === 'dark';
-        themeButton.textContent = dark ? '☀ Light mode' : '☾ Dark mode';
+        var dark = document.documentElement.classList.contains('sl-theme-dark');
+        themeButton.name = dark ? 'sun' : 'moon';
+        themeButton.label = themeTip.content = dark ? 'Light mode' : 'Dark mode';
     }
     themeButton.addEventListener('click', function () {
-        var dark = document.documentElement.dataset.theme !== 'dark';
-        if (dark) document.documentElement.dataset.theme = 'dark'; else delete document.documentElement.dataset.theme;
+        var dark = document.documentElement.classList.toggle('sl-theme-dark');
         try { localStorage.setItem('umletcollab.theme', dark ? 'DARK' : 'LIGHT'); } catch (e) { /* not remembered */ }
         showThemeButton();
     });

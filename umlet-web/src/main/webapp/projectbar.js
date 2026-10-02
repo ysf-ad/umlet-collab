@@ -38,6 +38,7 @@
 		'<div class="pb-spacer"></div>' +
 		'<button class="pb-trash" title="Restore deleted diagrams" aria-haspopup="true" aria-expanded="false" hidden></button>' +
 		'<span class="pb-status"></span>' +
+		'<button class="pb-theme" title="Switch between light and dark mode" aria-label="Switch between light and dark mode"></button>' +
 		'<button class="pb-me" title="Change your display name"></button>' +
 		'<button class="pb-share" title="Copy a link to this diagram">Copy link</button>';
 	var tabsEl = bar.querySelector('.pb-tabs');
@@ -48,6 +49,7 @@
 	projectMenu.hidden = true;
 	var statusEl = bar.querySelector('.pb-status');
 	var meEl = bar.querySelector('.pb-me');
+	var themeEl = bar.querySelector('.pb-theme');
 	var trashEl = bar.querySelector('.pb-trash');
 	var trashMenu = document.createElement('div');
 	trashMenu.className = 'pb-menu';
@@ -60,8 +62,8 @@
 		document.body.appendChild(toast);
 		document.body.appendChild(trashMenu);
 		document.body.appendChild(projectMenu);
-		var dark = typeof theme !== 'undefined' && theme === 'DARK'; // set by the host page
-		document.body.classList.add('has-projectbar', dark ? 'pb-dark' : 'pb-light');
+		document.body.classList.add('has-projectbar');
+		applyBarTheme(typeof theme !== 'undefined' ? theme : 'LIGHT'); // set by the host page
 		window.dispatchEvent(new Event('resize')); // GWT re-lays out below the bar
 		renderMe();
 		if (standalone) {
@@ -70,6 +72,18 @@
 		}
 	}
 	if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
+
+	// light/dark: the host page owns the theme (window.setAppTheme), the bar follows it
+	function applyBarTheme(t) {
+		var dark = t === 'DARK';
+		document.body.classList.toggle('pb-dark', dark);
+		document.body.classList.toggle('pb-light', !dark);
+		themeEl.textContent = dark ? '☀ Light' : '☾ Dark';
+	}
+	window.addEventListener('umlet-theme', function (e) { applyBarTheme(e.detail); });
+	themeEl.addEventListener('click', function () {
+		window.setAppTheme(document.body.classList.contains('pb-dark') ? 'LIGHT' : 'DARK');
+	});
 
 	var toastTimer;
 	function showToast(text) {
@@ -496,7 +510,9 @@
 		'#projectbar .pb-add:hover,#projectbar .pb-me:hover,#projectbar .pb-share:hover{background:var(--pb-tab);color:var(--pb-fg)}',
 		'#projectbar .pb-spacer{flex:1}',
 		'#projectbar .pb-status{align-self:center;color:var(--pb-muted)}',
-		'#projectbar .pb-me,#projectbar .pb-share,#projectbar .pb-trash{align-self:center;padding:4px 8px;border-radius:6px;white-space:nowrap}',
+		'#projectbar .pb-me,#projectbar .pb-share,#projectbar .pb-trash,#projectbar .pb-theme{align-self:center;padding:4px 8px;border-radius:6px;white-space:nowrap}',
+		'#projectbar .pb-theme{color:var(--pb-muted)}',
+		'#projectbar .pb-theme:hover{background:var(--pb-tab);color:var(--pb-fg)}',
 		'#projectbar .pb-trash{color:var(--pb-muted)}',
 		'#projectbar .pb-trash:hover{background:var(--pb-tab);color:var(--pb-fg)}',
 		'#projectbar .pb-trash[hidden]{display:none}',

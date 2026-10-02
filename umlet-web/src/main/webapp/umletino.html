@@ -24,77 +24,31 @@
 </noscript>
 
 <script>
+    // Light by default. Dark only if chosen (stored per browser, see setAppTheme) or forced with ?theme=dark.
     var theme;
-    let isIE = false;
 
-    if ((navigator.userAgent.indexOf("MSIE") !== -1) || (!!document.documentMode === true)) {
-        isIE = true;
-    }
-
-    function getTheme() {
-        // If browser does not support this feature, choose light theme
-        if (window.matchMedia('(prefers-color-scheme)').media === 'not all') {
-            return "LIGHT";
-        }
-
-        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            return "DARK";
-        } else {
-            return "LIGHT";
-        }
+    function readStoredTheme() {
+        try { return localStorage.getItem('umletcollab.theme'); } catch (e) { return null; }
     }
 
     function switchBodyColor(theme) {
-        switch (theme) {
-            case 'DARK':
-                document.body.style.backgroundColor = 'black';
-                break;
-            case 'LIGHT':
-                document.body.style.backgroundColor = '';
-                break;
-            default:
-                document.body.style.backgroundColor = '';
-        }
+        document.body.style.backgroundColor = theme === 'DARK' ? 'black' : '';
     }
 
-    function initializeMediaQuery() {
-        theme = getTheme();
+    // called by the theme toggle in the project bar (projectbar.js)
+    window.setAppTheme = function (newTheme) {
+        theme = newTheme === 'DARK' ? 'DARK' : 'LIGHT';
+        try { localStorage.setItem('umletcollab.theme', theme); } catch (e) { /* not remembered */ }
         switchBodyColor(theme);
-        // Observing theme changes (IE does not support this)
-        if (!isIE) {
-            const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-            darkModeMediaQuery.addEventListener("change", function (e) {
-                const darkMode = e.matches;
-                if (darkMode) {
-                    window.changeTheme('DARK');
-                    switchBodyColor('DARK')
-                } else {
-                    window.changeTheme('LIGHT');
-                    switchBodyColor('LIGHT')
-                }
-            });
-        }
-    }
+        if (window.changeTheme) window.changeTheme(theme); // exported by GWT (ThemeFactoryWeb)
+        window.dispatchEvent(new CustomEvent('umlet-theme', { detail: theme }));
+    };
 
-    if (isIE) {
-        // IE does not support URLSearchParams
-        const search = window.location.search;
-        if (search.indexOf('theme=') !== -1) {
-            theme = search.substring(search.indexOf("=") + 1).toUpperCase();
-            switchBodyColor(themeParam.toUpperCase());
-        } else {
-            initializeMediaQuery();
-        }
-    } else {
-        const urlParams = new URLSearchParams(window.location.search);
-        const themeParam = urlParams.get('theme');
-        if (themeParam !== null) {
-            theme = themeParam.toUpperCase();
-            switchBodyColor(themeParam.toUpperCase());
-        } else {
-            initializeMediaQuery();
-        }
-    }
+    (function () {
+        var param = new URLSearchParams(window.location.search).get('theme');
+        theme = (param || readStoredTheme() || 'LIGHT').toUpperCase() === 'DARK' ? 'DARK' : 'LIGHT';
+        switchBodyColor(theme);
+    })();
 </script>
 <div align="left" id="featurewarning"
      style="color: red; font-family: sans-serif; font-weight:bold; font-size:1.2em"></div>

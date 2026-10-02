@@ -8,15 +8,17 @@
     <script>
         // old links (?room=...) went to the editor directly
         if (new URLSearchParams(location.search).has('room')) location.replace('app.html' + location.search);
+        // light by default; the choice is shared with the editor (same storage key)
+        try { if (localStorage.getItem('umletcollab.theme') === 'DARK') document.documentElement.dataset.theme = 'dark'; } catch (e) { /* light */ }
     </script>
     <style>
         :root {
             --bg: #f6f7f9; --card: #ffffff; --fg: #1f2328; --muted: #656d76; --border: #d0d7de;
             --accent: #2563eb; --accent-fg: #ffffff; --danger: #cf222e; --hover: #eef1f5;
         }
-        @media (prefers-color-scheme: dark) {
-            :root { --bg: #111317; --card: #1b1d21; --fg: #e6e6e6; --muted: #9aa0a6; --border: #33363c; --accent: #6ea8fe; --accent-fg: #0b1220; --danger: #ff7b72; --hover: #24272d; }
-        }
+        :root[data-theme="dark"] { --bg: #111317; --card: #1b1d21; --fg: #e6e6e6; --muted: #9aa0a6; --border: #33363c; --accent: #6ea8fe; --accent-fg: #0b1220; --danger: #ff7b72; --hover: #24272d; }
+        #theme { margin-left: auto; align-self: flex-start; font: inherit; font-size: 13px; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        #theme:hover { color: var(--fg); background: var(--hover); }
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
         main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
@@ -56,6 +58,7 @@
             <h1>UMLetino Collab</h1>
             <p>Projects are shared with everyone who has the link. Each project holds several UML diagrams.</p>
         </div>
+        <button id="theme" type="button"></button>
     </header>
 
     <form id="create">
@@ -168,6 +171,19 @@
             .then(function (p) { location.href = 'app.html?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
             .catch(function () { button.disabled = false; alert('Couldn’t create the project. Try again.'); });
     });
+
+    var themeButton = document.getElementById('theme');
+    function showThemeButton() {
+        var dark = document.documentElement.dataset.theme === 'dark';
+        themeButton.textContent = dark ? '☀ Light mode' : '☾ Dark mode';
+    }
+    themeButton.addEventListener('click', function () {
+        var dark = document.documentElement.dataset.theme !== 'dark';
+        if (dark) document.documentElement.dataset.theme = 'dark'; else delete document.documentElement.dataset.theme;
+        try { localStorage.setItem('umletcollab.theme', dark ? 'DARK' : 'LIGHT'); } catch (e) { /* not remembered */ }
+        showThemeButton();
+    });
+    showThemeButton();
 
     load();
     window.addEventListener('focus', load);

@@ -203,6 +203,9 @@ public class CollabBridge {
 						existing.setAdditionalAttributes(incoming.getAdditionalAttributes());
 					}
 				}
+				// elements cache their drawing; without this a relation keeps drawing its old shape (and is not
+				// clickable where it is drawn, because hit testing already uses the new points)
+				existing.updateModelFromText();
 			}
 			else { // new element, or the element type changed
 				if (inDiagram) {

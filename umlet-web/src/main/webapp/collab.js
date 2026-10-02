@@ -46,6 +46,7 @@
 	var known = new Map();    // id -> record incl. version, nonce, deleted
 	var liveTimer = null;
 	var lastLiveFlush = 0;
+	var offlineChanges = false; // local edits made while disconnected that the server hasn't received yet
 
 	var ydoc, texts; // texts: element id -> Y.Text (one document per room, see initDoc)
 
@@ -136,6 +137,7 @@
 	function onLocalChange(live) {
 		scheduleRender();
 		if (applying || !everSynced) return;
+		if (!synced) offlineChanges = true;
 		if (!live) return flush();
 		// always async, so GWT finishes the current operation first (e.g. palette double click adds, then moves the element)
 		if (!liveTimer) liveTimer = setTimeout(flush, Math.max(0, LIVE_INTERVAL_MS - (Date.now() - lastLiveFlush)));
@@ -266,6 +268,7 @@
 		everSynced = true;
 		send({ t: 'y', u: toBase64(Y.encodeStateAsUpdate(ydoc)) }); // text edits made while offline (no-op if none)
 		flush();
+		offlineChanges = false;
 		announcePresence();
 	}
 
@@ -325,6 +328,13 @@
 		get room() { return room; },
 		me: me,
 		switchRoom: switchRoom,
+		// asked before the page closes: only warn if something really hasn't reached the server
+		// (the server persists what it received within a second, even if everyone leaves)
+		hasUnsavedChanges: function () {
+			if (!room) return false;
+			if (liveTimer) flush(); // a pending drag/redraw change: send it now
+			return offlineChanges || (!!ws && ws.bufferedAmount > 0);
+		},
 		setName: function (name) {
 			me.name = String(name).trim().slice(0, 40) || me.name;
 			store('umletcollab.name', me.name);

@@ -71,13 +71,21 @@ public class BaseletGWT implements EntryPoint, ThemeChangeListener {
 				Window.addWindowClosingHandler(new Window.ClosingHandler() {
 					@Override
 					public void onWindowClosing(Window.ClosingEvent closingEvent) {
-						closingEvent.setMessage("Do you really want to leave the page? You will lose any unsaved changes.");
+						if (hasUnsavedChanges()) {
+							closingEvent.setMessage("Do you really want to leave the page? You will lose any unsaved changes.");
+						}
 					}
 				});
 			}
 		}
 		log.info("GUI started");
 	}
+
+	/* the collaborative web version saves continuously and knows whether anything is still unsent; without it every change is unsaved */
+	private static native boolean hasUnsavedChanges() /*-{
+		var collab = $wnd.umletCollab;
+		return !collab || !collab.hasUnsavedChanges || collab.hasUnsavedChanges();
+	}-*/;
 
 	private void initScripts() {
 		ScriptResource scriptResource = GWT.create(ScriptResource.class);

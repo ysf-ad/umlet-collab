@@ -67,6 +67,10 @@
 		exportItem.parentNode.insertBefore(insertMenuItem, exportItem.nextSibling);
 	})();
 
+	var historyButton = el('sl-button', { slot: 'trigger', variant: 'text', size: 'small', caret: '' }, [icon('clock-history', 'prefix'), document.createTextNode('History')]);
+	var historyMenu = el('sl-menu');
+	var historyDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-end', className: 'pb-history' }, [historyButton, historyMenu]);
+
 	var statusEl = el('span', { className: 'pb-status' });
 	var themeIcon = el('sl-icon-button', { name: 'moon', label: 'Dark mode' });
 	var themeTooltip = tooltip('Dark mode', themeIcon);
@@ -84,6 +88,7 @@
 		el('div', { className: 'pb-spacer' }),
 		statusEl,
 		insertInput,
+		historyDropdown,
 		trashDropdown,
 		themeTooltip,
 		meButton,
@@ -377,14 +382,84 @@
 		trashMenu.innerHTML = '';
 		trashMenu.appendChild(el('sl-menu-label', { text: 'Restore a deleted diagram' }));
 		trash.forEach(function (d) {
+			var purge = el('sl-icon-button', { name: 'trash3', label: 'Delete "' + d.name + '" permanently', title: 'Delete permanently', className: 'pb-purge' });
+			purge.addEventListener('click', function (e) {
+				e.stopPropagation(); // not a restore
+				if (confirm('Permanently delete "' + d.name + '"?\nIts content and history are erased for everyone. This cannot be undone.')) send({ t: 'purge', id: d.id });
+			});
 			var item = el('sl-menu-item', { value: d.id }, [
 				icon('arrow-counterclockwise', 'prefix'),
 				document.createTextNode(d.name),
-				el('span', { slot: 'suffix', className: 'pb-menu-hint', text: d.deletedAt ? ago(d.deletedAt) : '' })
+				el('span', { slot: 'suffix', className: 'pb-suffix' }, [el('span', { className: 'pb-menu-hint', text: d.deletedAt ? ago(d.deletedAt) : '' }), purge])
 			]);
 			trashMenu.appendChild(item);
 		});
 	}
+	// ---- History menu: versions of the current diagram kept by the server (hourly, and before large deletes) ----
+	function when(time) {
+		var d = new Date(time), now = new Date();
+		var t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+		if (d.toDateString() === now.toDateString()) return 'Today ' + t;
+		var y = new Date(now); y.setDate(now.getDate() - 1);
+		if (d.toDateString() === y.toDateString()) return 'Yesterday ' + t;
+		return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' + t;
+	}
+	function fileName(time) {
+		var name = (current ? diagramName(current) : 'diagram').replace(/[\\/:*?"<>|]+/g, '_');
+		return name + ' ' + new Date(time).toISOString().slice(0, 16).replace('T', ' ').replace(':', '-') + '.uxf';
+	}
+	function download(text, name) {
+		var a = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'application/xml' })), download: name });
+		document.body.appendChild(a);
+		a.click();
+		setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+	}
+	var versions = [];
+	function renderHistory(state) {
+		historyMenu.innerHTML = '';
+		historyMenu.appendChild(el('sl-menu-label', { text: 'Restore this diagram to an earlier version' }));
+		if (state === 'loading') return historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [el('sl-spinner', { slot: 'prefix' }), document.createTextNode('Loading…')]));
+		if (state === 'error') return historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [document.createTextNode('Couldn’t load the history')]));
+		if (!versions.length) historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [document.createTextNode('No versions yet (saved hourly while editing)')]));
+		versions.forEach(function (v) {
+			var save = el('sl-icon-button', { name: 'download', label: 'Download as .uxf', title: 'Download as .uxf' });
+			save.addEventListener('click', function (e) {
+				e.stopPropagation(); // not a restore
+				window.umletCollab.getVersion(v.at).then(function (uxf) { download(uxf, fileName(v.at)); }).catch(function (err) { showToast('Download failed: ' + err.message); });
+			});
+			historyMenu.appendChild(el('sl-menu-item', { value: String(v.at) }, [
+				icon('arrow-counterclockwise', 'prefix'),
+				document.createTextNode(when(v.at)),
+				el('span', { slot: 'suffix', className: 'pb-suffix' }, [
+					el('span', { className: 'pb-menu-hint', text: v.count + ' element' + (v.count === 1 ? '' : 's') + (v.reason === 'hourly' ? '' : ' · ' + v.reason) }),
+					save
+				])
+			]));
+		});
+		historyMenu.appendChild(el('sl-divider'));
+		historyMenu.appendChild(el('sl-menu-item', { value: '__now' }, [icon('download', 'prefix'), document.createTextNode('Download current diagram')]));
+	}
+	historyDropdown.addEventListener('sl-show', function (e) {
+		if (e.target !== historyDropdown) return;
+		renderHistory('loading');
+		window.umletCollab.listVersions().then(function (list) { versions = list; renderHistory(); }).catch(function () { renderHistory('error'); });
+	});
+	historyMenu.addEventListener('sl-select', function (e) {
+		var value = e.detail.item.value;
+		if (value === '__now') {
+			var snap = window.umletCollab.currentUxf();
+			return download(snap, fileName(Date.now()));
+		}
+		var v = versions.filter(function (x) { return String(x.at) === value; })[0];
+		if (!v) return;
+		var label = when(v.at).replace(/^T/, 't').replace(/^Y/, 'y');
+		if (!confirm('Restore "' + (current ? diagramName(current) : 'this diagram') + '" to how it was ' + label + ' (' + v.count + ' elements)?\n\nThis replaces the diagram for everyone. The current version is kept in History, so you can undo this.')) return;
+		window.umletCollab.getVersion(v.at).then(function (uxf) {
+			window.umletCollab.replaceWithUxf(uxf);
+			showToast('Restored the version from ' + label);
+		}).catch(function (err) { showToast('Restore failed: ' + err.message); });
+	});
+
 	trashMenu.addEventListener('sl-select', function (e) {
 		send({ t: 'restore', id: e.detail.item.value });
 	});
@@ -488,6 +563,8 @@
 		'#projectbar .pb-spacer{flex:1}',
 		'#projectbar .pb-status{color:var(--sl-color-warning-700)}',
 		'#projectbar .pb-trash[hidden]{display:none}',
+		'.pb-suffix{display:inline-flex;align-items:center;gap:4px}',
+		'.pb-suffix sl-icon-button::part(base){padding:2px;font-size:14px}',
 		'#projectbar .pb-dot{display:inline-block;width:10px;height:10px;border-radius:50%}',
 		'.pb-menu-hint{color:var(--sl-color-neutral-500);font-size:var(--sl-font-size-x-small)}',
 		'sl-menu{min-width:240px;max-width:340px;max-height:70vh;overflow-y:auto}',

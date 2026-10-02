@@ -63,6 +63,7 @@ What runs where:
 - **Applying in place.** Remote changes update the existing Java objects. Your selection, the properties panel and the caret survive, and an element you are dragging is never moved under your mouse.
 - **Zoom and pan stay local.** UMLet has no camera: zooming, panning and canvas realignment move all elements. `DrawPanel` wraps those operations in `beginViewChange()`/`endViewChange()`. The bridge absorbs the shift into a per-user view offset and does not broadcast it. Shared coordinates are always at the default zoom level.
 - **Offline.** If the connection drops, edits continue locally. Text merges on reconnect; geometry is diffed against the last known state and sent.
+- **Version history.** Each diagram's server keeps up to 60 versions as `.uxf` files (`src/room.js`, stored in the room's Durable Object). It saves the diagram as it was before editing resumes, at most once an hour and only if it changed. It also saves a version right before any change that deletes at least 5 elements or half the diagram (an accidental File Import, select-all + delete), and before a restore. The **History** menu in the tab bar lists the versions; picking one restores it for everyone, and each can be downloaded as `.uxf`.
 - **Import vs. insert.** *File Import* (editor menu) replaces the whole diagram for everyone. **File Insert** (editor menu, below File Export) merges a file into the current diagram instead, for combining work from separate files. `collab.js` parses the file, rescales it from the file's zoom level, gives every element a new id, and places the group to the right of the existing elements, top-aligned. The elements are then added like a remote change, and the next diff sends them to everyone.
 
 ### Where the code is
@@ -85,7 +86,7 @@ What runs where:
 
 - There is no undo/redo in UMLetino, so there is no per-user undo either.
 - There is no auth (by design for an internal tool): anyone with the URL can see every project and edit or delete it.
-- Deleting a diagram or project only hides it. Deleted diagrams can be restored from the **Deleted** menu in the tab bar, and deleted projects from **Recently deleted** on the project list. Nothing is ever purged.
+- Deleting a diagram or project only hides it. Deleted diagrams can be restored from the **Deleted** menu in the tab bar, and deleted projects from **Recently deleted** on the project list. The Deleted menu also has a button to delete a diagram permanently, which erases its content and history from the server.
 - If two people change the same element's geometry at the same moment, one change wins; text is merged instead.
 - The Node relay keeps rooms in memory only (dropped 10 minutes after the last person leaves). The Cloudflare version persists them.
 

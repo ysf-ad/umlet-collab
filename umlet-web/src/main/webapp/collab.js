@@ -184,6 +184,7 @@
 		var zoom = parseInt(childText(doc.documentElement, 'zoom_level'), 10) || DEFAULT_ZOOM;
 		var f = DEFAULT_ZOOM / zoom; // records are at the default zoom level
 		var out = [];
+		out.help = childText(doc.documentElement, 'help_text');
 		var els = doc.getElementsByTagName('element');
 		for (var i = 0; i < els.length; i++) {
 			var e = els[i];
@@ -224,6 +225,55 @@
 		}
 		applyRecords(records, false);
 		return records.length;
+	}
+
+	// ---- version history (kept by the server, see collab-server/src/room.js) ----------------------------------
+	var pending = {}; // reply type -> [resolve]
+	function ask(msg, replyType) {
+		return new Promise(function (resolve, reject) {
+			if (!ws || ws.readyState !== 1) return reject(new Error('not connected'));
+			(pending[replyType] = pending[replyType] || []).push(resolve);
+			send(msg);
+			setTimeout(function () { reject(new Error('no answer from the server')); }, 10000);
+		});
+	}
+	function answer(msg) {
+		var waiting = pending[msg.t] || [];
+		pending[msg.t] = [];
+		waiting.forEach(function (resolve) { resolve(msg); });
+	}
+	function listVersions() { return ask({ t: 'versions' }, 'versions').then(function (m) { return m.versions || []; }); }
+	function getVersion(at) {
+		return ask({ t: 'version', at: at }, 'version').then(function (m) {
+			if (!m.uxf) throw new Error('that version no longer exists');
+			return m.uxf;
+		});
+	}
+	// the current diagram as a .uxf file (same format as the server's versions)
+	function currentUxf() {
+		var esc = function (v) { return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+		var records = window.umletCollabSnapshot();
+		var parts = ['<?xml version="1.0" encoding="UTF-8" standalone="no"?>', '<diagram program="umlet" version="15.1">', '  <zoom_level>10</zoom_level>'];
+		records.forEach(function (r) {
+			if (r.id === '_diagram') { if (r.pa) parts.push('  <help_text>' + esc(r.pa) + '</help_text>'); return; }
+			parts.push('  <element>', '    <id>' + esc(r.type) + '</id>', '    <coordinates>',
+				'      <x>' + r.x + '</x>', '      <y>' + r.y + '</y>', '      <w>' + r.w + '</w>', '      <h>' + r.h + '</h>',
+				'    </coordinates>', '    <panel_attributes>' + esc(r.pa) + '</panel_attributes>',
+				'    <additional_attributes>' + esc(r.aa) + '</additional_attributes>', '  </element>');
+		});
+		parts.push('</diagram>', '');
+		return parts.join('\n');
+	}
+
+	// replaces the whole diagram with a .uxf file for everyone (the server keeps the replaced state as a version)
+	function replaceWithUxf(text) {
+		if (!ready) throw new Error('the editor is still loading');
+		var records = parseUxf(text);
+		records.push({ id: '_diagram', type: '_diagram', pa: records.help || '' });
+		send({ t: 'checkpoint' }); // the server keeps the diagram as it is now, so the restore can be undone
+		applyRecords(records, true);
+		flush();
+		return records.length - 1;
 	}
 
 	function transformIndex(index, delta) {
@@ -351,6 +401,7 @@
 			else if (msg.t === 'y') onRemoteY(msg.u);
 			else if (msg.t === 'presence') onPresence(msg);
 			else if (msg.t === 'leave') removePeer(msg.from);
+			else if (msg.t === 'versions' || msg.t === 'version') answer(msg);
 		};
 		ws.onclose = function () {
 			if (gen !== generation) return;
@@ -400,6 +451,10 @@
 		onReady: function () { ready = true; trySync(); },
 		onLocalChange: onLocalChange,
 		insertUxf: insertUxf,
+		replaceWithUxf: replaceWithUxf,
+		currentUxf: currentUxf,
+		listVersions: listVersions,
+		getVersion: getVersion,
 		debug: {
 			state: function () {
 				return { synced: synced, elements: Array.from(known.values()), texts: texts.toJSON(), peers: Object.keys(peers).map(function (id) { return { id: id, name: peers[id].name, sel: peers[id].sel }; }) };

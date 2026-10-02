@@ -22,12 +22,90 @@ export function fromBase64(b64) {
 	return bytes;
 }
 
+// Version history: the diagram as it was before editing resumed, at most once an hour (only if it changed), plus
+// a version right before any change that deletes a lot at once (File Import replacing the diagram, select-all +
+// delete, restoring an old version). Versions are stored as .uxf text.
+export const VERSION_INTERVAL_MS = 60 * 60 * 1000;
+export const MAX_VERSIONS = 60;
+const LARGE_DELETE_MIN = 5;      // deleting at least this many elements in one go...
+const LARGE_DELETE_SHARE = 0.5;  // ...or at least half of the diagram (when it has 2+ elements)
+
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 export class RoomState {
 	constructor() {
 		this.elements = new Map();
 		this.y = null; // Uint8Array (merged Yjs update) or null
 		this.dirtyElements = new Set();
 		this.yDirty = false;
+		this.lastVersion = null; // {at, uxf} of the newest saved version
+	}
+
+	/* the current diagram as a .uxf file (texts come from the Yjs document, falling back to the element records) */
+	toUxf() {
+		const texts = new Map();
+		if (this.y) {
+			const doc = new Y.Doc();
+			Y.applyUpdate(doc, this.y);
+			doc.getMap('texts').forEach((t, id) => texts.set(id, t.toString()));
+		}
+		const live = Array.from(this.elements.values()).filter((e) => !e.deleted && e.id !== '_diagram' && e.type);
+		const help = texts.get('_diagram') ?? this.elements.get('_diagram')?.pa ?? '';
+		const parts = ['<?xml version="1.0" encoding="UTF-8" standalone="no"?>', '<diagram program="umlet" version="15.1">', '  <zoom_level>10</zoom_level>'];
+		if (help) parts.push('  <help_text>' + esc(help) + '</help_text>');
+		for (const e of live) {
+			parts.push('  <element>', '    <id>' + esc(e.type) + '</id>', '    <coordinates>',
+				'      <x>' + (e.x | 0) + '</x>', '      <y>' + (e.y | 0) + '</y>', '      <w>' + (e.w | 0) + '</w>', '      <h>' + (e.h | 0) + '</h>',
+				'    </coordinates>', '    <panel_attributes>' + esc(texts.get(e.id) ?? e.pa ?? '') + '</panel_attributes>',
+				'    <additional_attributes>' + esc(e.aa ?? '') + '</additional_attributes>', '  </element>');
+		}
+		parts.push('</diagram>', '');
+		return { uxf: parts.join('\n'), count: live.length };
+	}
+
+	liveCount() {
+		let n = 0;
+		for (const e of this.elements.values()) if (!e.deleted && e.id !== '_diagram') n++;
+		return n;
+	}
+
+	/* does this message delete a lot of the diagram at once? */
+	isLargeDelete(msg) {
+		if (msg.t !== 'ops' || !Array.isArray(msg.ops)) return false;
+		let n = 0;
+		for (const op of msg.ops) {
+			const cur = op && this.elements.get(op.id);
+			if (op && op.deleted && cur && !cur.deleted && op.id !== '_diagram' && typeof op.version === 'number' && wins(op, cur)) n++;
+		}
+		const live = this.liveCount();
+		return n >= LARGE_DELETE_MIN || (live >= 2 && n >= live * LARGE_DELETE_SHARE);
+	}
+
+	/* a version of the diagram as it is now (e.g. before restoring an old version), unless it equals the newest one */
+	versionNow(reason, now = Date.now()) {
+		if (!this.liveCount()) return null;
+		const { uxf, count } = this.toUxf();
+		if (this.lastVersion && this.lastVersion.uxf === uxf) return null;
+		this.lastVersion = { at: now, uxf };
+		return { at: now, reason, uxf, count };
+	}
+
+	/**
+	 * Call before handling a change. Returns a version {at, reason, uxf, count} to store, or null: the diagram as it
+	 * is now, if an hour has passed since the last version or the change deletes a lot, and it differs from that version.
+	 */
+	versionBefore(msg, now = Date.now()) {
+		if (msg.t !== 'ops' && msg.t !== 'y') return null;
+		const large = this.isLargeDelete(msg);
+		if (!large && this.lastVersion && now - this.lastVersion.at < VERSION_INTERVAL_MS) return null;
+		if (!this.liveCount()) return null; // nothing worth keeping yet
+		const { uxf, count } = this.toUxf();
+		if (this.lastVersion && this.lastVersion.uxf === uxf) {
+			if (!large) this.lastVersion.at = now; // unchanged: wait another hour
+			return null;
+		}
+		this.lastVersion = { at: now, uxf };
+		return { at: now, reason: large ? 'before a large change' : 'hourly', uxf, count };
 	}
 
 	/* state sent to a client when it joins */

@@ -7,8 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { RoomState } from './src/room.js';
-import { ProjectState, DirectoryState, newId, cleanName, isValidId } from './src/project.js';
+import { RoomState, MAX_VERSIONS } from './src/room.js';
+import { ProjectState, DirectoryState, newId, cleanName, isValidId, roomName as roomKey } from './src/project.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
@@ -109,8 +109,13 @@ projectWss.on('connection', (ws, req) => {
 			ws.viewing = { id: ws.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16) };
 			return broadcast(JSON.stringify({ t: 'viewers', viewers: viewers() }));
 		}
-		const { changed, reply } = p.state.handle(msg);
+		const { changed, reply, purged } = p.state.handle(msg);
 		if (reply) ws.send(JSON.stringify(reply));
+		if (purged) {
+			const room = rooms.get(roomKey(id, purged));
+			if (room) for (const c of room.clients) c.close(1000, 'deleted');
+			rooms.delete(roomKey(id, purged));
+		}
 		if (changed) {
 			directory.upsert(p.state.summary());
 			broadcast(JSON.stringify(message()));
@@ -125,7 +130,7 @@ projectWss.on('connection', (ws, req) => {
 
 wss.on('connection', (ws, req) => {
 	const roomName = new URL(req.url, 'http://x').searchParams.get('room') || 'default';
-	if (!rooms.has(roomName)) rooms.set(roomName, { clients: new Set(), state: new RoomState() });
+	if (!rooms.has(roomName)) rooms.set(roomName, { clients: new Set(), state: new RoomState(), versions: [] }); // versions: newest first
 	const room = rooms.get(roomName);
 	ws.id = Math.random().toString(36).slice(2, 10);
 	room.clients.add(ws);
@@ -134,6 +139,13 @@ wss.on('connection', (ws, req) => {
 	ws.on('message', (raw) => {
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
+		if (msg.t === 'versions') return ws.send(JSON.stringify({ t: 'versions', versions: room.versions.map(({ at, reason, count }) => ({ at, reason, count })) }));
+		if (msg.t === 'version') {
+			const v = room.versions.find((x) => x.at === msg.at);
+			return ws.send(JSON.stringify({ t: 'version', at: msg.at, uxf: v ? v.uxf : null }));
+		}
+		const version = msg.t === 'checkpoint' ? room.state.versionNow('before a restore') : room.state.versionBefore(msg);
+		if (version) room.versions = [version].concat(room.versions).slice(0, MAX_VERSIONS);
 		const out = room.state.handle(msg);
 		if (!out) return;
 		const projectId = roomName.includes('/') ? roomName.split('/')[0] : null;

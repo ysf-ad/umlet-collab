@@ -53,8 +53,9 @@ export class ProjectState {
 	}
 
 	/**
-	 * Applies a client operation. Returns {changed, reply} where reply is sent back to the sender only
-	 * (e.g. the id of a new diagram so it can switch to it), or an error.
+	 * Applies a client operation. Returns {changed, reply, purged} where reply is sent back to the sender only
+	 * (e.g. the id of a new diagram so it can switch to it), or an error, and purged is the id of a diagram whose
+	 * room data must be erased.
 	 */
 	handle(msg) {
 		const diagrams = this.meta.diagrams;
@@ -89,6 +90,13 @@ export class ProjectState {
 				delete d.deletedAt;
 				this.meta.diagrams = others.concat([d], diagrams.filter((x) => x.deleted && x !== d));
 				return this.touched({ t: 'restored', id: d.id });
+			}
+			case 'purge': {
+				// permanently delete a diagram that is in the trash; the host also wipes its room (purged: id)
+				const d = diagrams.find((x) => x.id === msg.id && x.deleted);
+				if (!d) return { changed: false };
+				this.meta.diagrams = diagrams.filter((x) => x !== d);
+				return { ...this.touched(), purged: d.id };
 			}
 			case 'move': {
 				// index: new position among the visible diagrams

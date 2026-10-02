@@ -3,11 +3,11 @@
 // - GET/POST /api/projects, DELETE /api/projects/<id>   project directory (landing page)
 // - GET /api/projects?deleted=1, POST /api/projects/<id>/restore   recently deleted projects
 // - /project?id=<projectId>   websocket to the project's Durable Object (diagram list, who views what)
-// - /collab?room=<name>       websocket to one Durable Object per diagram room (element sync, see room.js)
+// - /collab?room=<name>       websocket to one Durable Object per diagram room (element sync, version history, see room.js)
 // Everything is public: whoever has a link can edit (internal tool, no accounts).
 import { DurableObject } from 'cloudflare:workers';
-import { RoomState, toBase64, fromBase64 } from './room.js';
-import { ProjectState, DirectoryState, newId, cleanName, isValidId } from './project.js';
+import { RoomState, toBase64, fromBase64, MAX_VERSIONS } from './room.js';
+import { ProjectState, DirectoryState, newId, cleanName, isValidId, roomName } from './project.js';
 
 const FLUSH_MS = 1000;            // room state is saved at most once per second
 const TOUCH_INTERVAL_MS = 60000;  // "last edited" in the directory is updated at most once per minute per room
@@ -61,10 +61,19 @@ export class Room extends DurableObject {
 			const y = await ctx.storage.get('y');
 			if (y) this.state.y = fromBase64(y);
 			this.name = await ctx.storage.get('name');
+			const newest = await ctx.storage.list({ prefix: 'vu:', reverse: true, limit: 1 });
+			for (const [key, uxf] of newest) this.state.lastVersion = { at: Number(key.slice(3)), uxf };
 		});
 	}
 
 	async fetch(request) {
+		if (new URL(request.url).pathname === '/purge') { // the diagram was permanently deleted from its project
+			for (const ws of this.ctx.getWebSockets()) try { ws.close(1000, 'deleted'); } catch { /* closed */ }
+			await this.ctx.storage.deleteAlarm();
+			await this.ctx.storage.deleteAll();
+			this.state = new RoomState();
+			return json({ ok: true });
+		}
 		if (!this.name) {
 			this.name = new URL(request.url).searchParams.get('room') || '';
 			await this.ctx.storage.put('name', this.name);
@@ -80,6 +89,13 @@ export class Room extends DurableObject {
 	async webSocketMessage(ws, raw) {
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
+		if (msg.t === 'versions') return ws.send(JSON.stringify({ t: 'versions', versions: await this.listVersions() }));
+		if (msg.t === 'version') {
+			const uxf = await this.ctx.storage.get(versionKey('vu:', msg.at));
+			return ws.send(JSON.stringify({ t: 'version', at: msg.at, uxf: uxf || null }));
+		}
+		const version = msg.t === 'checkpoint' ? this.state.versionNow('before a restore') : this.state.versionBefore(msg);
+		if (version) await this.saveVersion(version);
 		const out = this.state.handle(msg);
 		if (!out) return;
 		if (msg.t !== 'presence') await this.scheduleFlush();
@@ -97,6 +113,17 @@ export class Room extends DurableObject {
 
 	async alarm() {
 		await this.flush();
+	}
+
+	async listVersions() {
+		return Array.from((await this.ctx.storage.list({ prefix: 'vm:', reverse: true })).values());
+	}
+
+	async saveVersion({ at, reason, uxf, count }) {
+		await this.ctx.storage.put({ [versionKey('vm:', at)]: { at, reason, count }, [versionKey('vu:', at)]: uxf });
+		const all = await this.ctx.storage.list({ prefix: 'vm:', reverse: true });
+		const old = Array.from(all.keys()).slice(MAX_VERSIONS);
+		if (old.length) await this.ctx.storage.delete(old.flatMap((k) => [k, 'vu:' + k.slice(3)]));
 	}
 
 	async scheduleFlush() {
@@ -188,8 +215,9 @@ export class Project extends DurableObject {
 			return;
 		}
 		if (!this.state || this.state.meta.deleted) return;
-		const { changed, reply } = this.state.handle(msg);
+		const { changed, reply, purged } = this.state.handle(msg);
 		if (reply) ws.send(JSON.stringify(reply));
+		if (purged) await this.env.ROOMS.get(this.env.ROOMS.idFromName(roomName(this.state.meta.id, purged))).fetch('https://do/purge', { method: 'POST' });
 		if (changed) {
 			await this.save();
 			broadcast(this.ctx, JSON.stringify(this.message()));
@@ -228,6 +256,11 @@ export class Directory extends DurableObject {
 		if (entry) await this.ctx.storage.put('p:' + entry.id, entry);
 		return json({ ok: !!entry });
 	}
+}
+
+// sortable storage key for a version timestamp
+function versionKey(prefix, at) {
+	return prefix + String(Math.floor(Number(at)) || 0).padStart(15, '0');
 }
 
 function broadcast(ctx, data, except) {

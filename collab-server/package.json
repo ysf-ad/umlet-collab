@@ -4,6 +4,20 @@
   "private": true,
   "license": "GPL-3.0",
   "main": "server.js",
-  "scripts": { "start": "node server.js", "test": "node --test test/*.test.js" },
-  "dependencies": { "ws": "^8.18.0" }
+  "scripts": {
+    "build": "node scripts/build.js",
+    "start": "node server.js",
+    "dev": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "wrangler": "^4.146.0"
+  },
+  "type": "module"
 }

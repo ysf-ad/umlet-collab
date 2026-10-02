@@ -212,6 +212,33 @@ public class CollabBridge {
 		return ge;
 	}
 
+	/* ids of the locally selected elements */
+	JsArray<JavaScriptObject> selection() {
+		JsArray<JavaScriptObject> result = JavaScriptObject.createArray().cast();
+		for (GridElement ge : panel().getSelector().getSelectedElements()) {
+			if (!panel().isPreviewElement(ge)) {
+				pushString(result, idOf(ge));
+			}
+		}
+		return result;
+	}
+
+	/* id of the element whose text is shown in the properties panel (the diagram itself if nothing is selected) */
+	String propertiesId() {
+		List<GridElement> selected = panel().getSelector().getSelectedElements();
+		return selected.isEmpty() ? DIAGRAM_ID : idOf(selected.get(selected.size() - 1));
+	}
+
+	/* local canvas rectangle (in px, includes zoom and view offset) of an element, or null */
+	JavaScriptObject localRect(String id) {
+		GridElement ge = elementById.get(id);
+		if (ge == null || !panel().getDiagram().getGridElements().contains(ge)) {
+			return null;
+		}
+		Rectangle r = ge.getRectangle();
+		return record(id, "", r.getX(), r.getY(), r.getWidth(), r.getHeight(), "", "");
+	}
+
 	int zoomLevel() {
 		return panel().getDiagram().getZoomLevel();
 	}
@@ -239,6 +266,15 @@ public class CollabBridge {
 				y: that.@com.web.gwt.client.collab.CollabBridge::viewY()()
 			};
 		});
+		$wnd.umletCollabSelection = $entry(function() {
+			return that.@com.web.gwt.client.collab.CollabBridge::selection()();
+		});
+		$wnd.umletCollabPropertiesId = $entry(function() {
+			return that.@com.web.gwt.client.collab.CollabBridge::propertiesId()();
+		});
+		$wnd.umletCollabRect = $entry(function(id) {
+			return that.@com.web.gwt.client.collab.CollabBridge::localRect(Ljava/lang/String;)(id);
+		});
 		if ($wnd.umletCollab && $wnd.umletCollab.onReady) {
 			$wnd.umletCollab.onReady();
 		}
@@ -246,6 +282,10 @@ public class CollabBridge {
 
 	private static native JavaScriptObject record(String id, String type, int x, int y, int w, int h, String pa, String aa) /*-{
 		return { id: id, type: type, x: x, y: y, w: w, h: h, pa: pa, aa: aa };
+	}-*/;
+
+	private static native void pushString(JsArray<JavaScriptObject> array, String value) /*-{
+		array.push(value);
 	}-*/;
 
 	private static native String str(JavaScriptObject o, String key) /*-{

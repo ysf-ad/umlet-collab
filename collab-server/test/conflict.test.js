@@ -1,10 +1,15 @@
-// Relay merge-rule tests. Starts its own server on a free port: node --test test/
-const { test, before, after } = require('node:test');
-const assert = require('node:assert');
-const { spawn } = require('node:child_process');
-const path = require('node:path');
-const WebSocket = require('ws');
+// Relay tests: merge rules (via the Node relay, same RoomState as the Durable Object) and Yjs text merging.
+// Run: npm test
+import { test, before, after } from 'node:test';
+import assert from 'node:assert';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import WebSocket from 'ws';
+import * as Y from 'yjs';
+import { RoomState, toBase64, fromBase64 } from '../src/room.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 18080 + Math.floor(Math.random() * 1000);
 let server;
 
@@ -37,7 +42,6 @@ test('concurrent edits with equal versions converge on the lower nonce', async (
 	await sleep(50);
 	const x = late.inbox.find((m) => m.t === 'hello').elements.find((e) => e.id === 'x');
 	assert.strictEqual(x.pa, 'from B');
-	// A must have been told about B's winning edit, B must not have been sent A's losing one after its own
 	assert.ok(received(a).includes('from B'));
 	[a, b, late].forEach((c) => c.ws.close());
 });
@@ -62,4 +66,32 @@ test('deletions are kept as tombstones for late joiners', async () => {
 	const x = late.inbox.find((m) => m.t === 'hello').elements.find((e) => e.id === 'x');
 	assert.strictEqual(x.deleted, true);
 	[a, late].forEach((c) => c.ws.close());
+});
+
+test('presence is relayed but never stored', async () => {
+	const a = await client('t4'), b = await client('t4');
+	a.ws.send(JSON.stringify({ t: 'presence', x: 1, y: 2, sel: ['x'] }));
+	await sleep(50);
+	assert.ok(b.inbox.some((m) => m.t === 'presence' && m.sel[0] === 'x'));
+	const late = await client('t4');
+	await sleep(50);
+	assert.deepStrictEqual(late.inbox.find((m) => m.t === 'hello').elements, []);
+	[a, b, late].forEach((c) => c.ws.close());
+});
+
+test('concurrent typing in the same text merges (both edits survive)', () => {
+	const room = new RoomState();
+	const docA = new Y.Doc(), docB = new Y.Doc();
+	const relay = (doc) => doc.on('update', (u) => room.applyY(toBase64(u)));
+	relay(docA);
+	relay(docB);
+	docA.getMap('texts').set('x', new Y.Text('Use case'));
+	Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA));
+	// both users type at the same time without seeing each other's edit
+	docA.getMap('texts').get('x').insert(0, 'My ');
+	docB.getMap('texts').get('x').insert(8, ' 1');
+	// a late joiner gets the merged state from the room
+	const late = new Y.Doc();
+	Y.applyUpdate(late, fromBase64(room.hello().y));
+	assert.strictEqual(late.getMap('texts').get('x').toString(), 'My Use case 1');
 });

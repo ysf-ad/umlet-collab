@@ -1,16 +1,23 @@
-// Collaboration client for UMLetino (Excalidraw-style per-element sync).
+// Collaboration client for UMLetino.
 //
 // GWT side (see CollabBridge.java / WebFileChangeNotifier.java):
 //   umletCollab.onLocalChange(live)        called by GWT after every local change (live=true: on redraw/drag, maybe nothing changed; throttled)
 //   umletCollabSnapshot()                  -> [{id, type, x, y, w, h, pa, aa}] all elements at default zoom
 //   umletCollabApply(records, replaceAll)  applies remote records in place
 //   umletCollabView()                      -> {zoom, x, y}: zoom level (grid size, default 10) and local view offset in px
+//   umletCollabSelection()                 -> ids of the selected elements
+//   umletCollabPropertiesId()              -> id of the element shown in the properties panel ('_diagram' if none)
+//   umletCollabRect(id)                    -> local canvas rectangle {x, y, w, h} of an element
 //
-// Every element has {version, nonce}. A local change bumps the version; a remote record replaces the
-// local one only if its version is higher (ties are broken by the lower nonce), so all clients converge.
+// Sync model:
+// - geometry/type/relation points: per element {version, nonce}, last writer wins (Excalidraw style). A remote record
+//   replaces the local one only if its version is higher (ties: lower nonce), so all clients converge.
+// - element text (panel attributes): one Y.Text per element in a shared Yjs document, so concurrent typing merges.
+// - presence (cursor + selection): ephemeral, never stored.
 (function () {
 	var DEFAULT_ZOOM = 10;
-	var LIVE_INTERVAL_MS = 33; // ~30 Hz for drags and cursors
+	var LIVE_INTERVAL_MS = 33; // ~30 Hz for drags, cursors and selection
+	var REMOTE = 'remote';     // Yjs transaction origin for updates received from the server
 
 	var params = new URLSearchParams(location.search);
 	var room = params.get('room');
@@ -20,78 +27,159 @@
 		history.replaceState(null, '', location.pathname + '?' + params.toString() + location.hash);
 	}
 
-	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#469990'];
+	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa4c2', '#f032e6', '#469990'];
 	var me = { id: null, color: COLORS[Math.floor(Math.random() * COLORS.length)], name: 'User ' + Math.floor(Math.random() * 90 + 10) };
 
 	var ws = null;
 	var ready = false;        // GWT exported its functions
-	var serverState = null;   // elements from the last 'hello' that are not applied yet
+	var serverState = null;   // element records from the last 'hello' that are not applied yet (Map)
 	var synced = false;       // initial state has been exchanged; local changes may be sent
 	var everSynced = false;
-	var applying = false;     // true while applying remote records (prevents echo)
+	var applying = false;     // true while applying remote changes (prevents echo)
 	var known = new Map();    // id -> record incl. version, nonce, deleted
 	var liveTimer = null;
 	var lastLiveFlush = 0;
 
+	var ydoc = new Y.Doc();
+	var texts = ydoc.getMap('texts'); // element id -> Y.Text
+
 	function rand() { return Math.floor(Math.random() * 2147483647); }
-	function content(r) { return JSON.stringify([r.type, r.x, r.y, r.w, r.h, r.pa, r.aa, !!r.deleted]); }
+	// text is synced through Yjs, so it is not part of the last-writer-wins content
+	function content(r) { return JSON.stringify([r.type, r.x, r.y, r.w, r.h, r.aa, !!r.deleted]); }
 	function wins(op, cur) {
 		return !cur || op.version > cur.version || (op.version === cur.version && op.nonce < cur.nonce);
+	}
+	function textOf(id) {
+		var t = texts.get(id);
+		return t ? t.toString() : null;
+	}
+	function withText(rec) {
+		var text = textOf(rec.id);
+		if (text === null || rec.deleted) return rec;
+		var copy = {};
+		for (var k in rec) copy[k] = rec[k];
+		copy.pa = text;
+		return copy;
+	}
+	function toBase64(bytes) {
+		var s = '';
+		for (var i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+		return btoa(s);
+	}
+	function fromBase64(b64) {
+		var s = atob(b64), bytes = new Uint8Array(s.length);
+		for (var i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+		return bytes;
+	}
+	// smallest edit (common prefix/suffix) that turns the Y.Text into value, so concurrent edits elsewhere survive
+	function setText(ytext, value) {
+		var old = ytext.toString();
+		if (old === value) return;
+		var start = 0;
+		while (start < old.length && start < value.length && old[start] === value[start]) start++;
+		var end = 0;
+		while (end < old.length - start && end < value.length - start && old[old.length - 1 - end] === value[value.length - 1 - end]) end++;
+		if (old.length - start - end > 0) ytext.delete(start, old.length - start - end);
+		if (value.length - start - end > 0) ytext.insert(start, value.slice(start, value.length - end));
 	}
 
 	function send(msg) {
 		if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 	}
 
+	ydoc.on('update', function (update, origin) {
+		if (origin !== REMOTE && synced) send({ t: 'y', u: toBase64(update) });
+	});
+
 	// ---- local -> remote -------------------------------------------------------
+	// While offline (after the first sync) text edits still go into the Yjs document, so they merge with the
+	// others' edits on reconnect. Geometry changes are diffed against the last known state when reconnected.
 	function flush() {
-		if (!synced || applying) return;
+		if (!(synced || (everSynced && ready)) || applying) return;
 		clearTimeout(liveTimer);
 		liveTimer = null;
 		lastLiveFlush = Date.now();
 		var snapshot = window.umletCollabSnapshot();
 		var ops = [];
 		var present = new Set();
-		for (var i = 0; i < snapshot.length; i++) {
-			var r = snapshot[i];
-			present.add(r.id);
-			var cur = known.get(r.id);
-			if (cur && content(cur) === content(r)) continue;
-			var op = { id: r.id, type: r.type, x: r.x, y: r.y, w: r.w, h: r.h, pa: r.pa, aa: r.aa, deleted: false, version: (cur ? cur.version : 0) + 1, nonce: rand() };
-			known.set(op.id, op);
-			ops.push(op);
-		}
-		known.forEach(function (cur, id) {
-			if (!cur.deleted && !present.has(id)) {
-				var op = { id: id, deleted: true, version: cur.version + 1, nonce: rand() };
-				known.set(id, op);
+		ydoc.transact(function () {
+			for (var i = 0; i < snapshot.length; i++) {
+				var r = snapshot[i];
+				present.add(r.id);
+				var cur = known.get(r.id);
+				var t = texts.get(r.id);
+				if (t) setText(t, r.pa);
+				else if (!cur || cur.deleted || cur.pa !== r.pa) texts.set(r.id, new Y.Text(r.pa));
+				if (!synced || (cur && !cur.deleted && content(cur) === content(r))) continue;
+				// pa is included so a late joiner can create the element even before its text arrives
+				var op = { id: r.id, type: r.type, x: r.x, y: r.y, w: r.w, h: r.h, pa: r.pa, aa: r.aa, deleted: false, version: (cur ? cur.version : 0) + 1, nonce: rand() };
+				known.set(op.id, op);
 				ops.push(op);
 			}
+			if (synced) known.forEach(function (cur, id) {
+				if (!cur.deleted && !present.has(id)) {
+					var op = { id: id, deleted: true, version: cur.version + 1, nonce: rand() };
+					known.set(id, op);
+					ops.push(op);
+					texts.delete(id);
+				}
+			});
 		});
 		if (ops.length) send({ t: 'ops', ops: ops });
+		sendPresence(false);
+		scheduleRender();
 	}
 
 	function onLocalChange(live) {
-		if (applying || !synced) return;
+		scheduleRender();
+		if (applying || !everSynced) return;
 		if (!live) return flush();
 		// always async, so GWT finishes the current operation first (e.g. palette double click adds, then moves the element)
 		if (!liveTimer) liveTimer = setTimeout(flush, Math.max(0, LIVE_INTERVAL_MS - (Date.now() - lastLiveFlush)));
 	}
 
 	// ---- remote -> local -------------------------------------------------------
-	function applyRecords(records, replaceAll) {
-		// keep the caret if the user is typing in the properties panel and it gets refreshed
+	function focusedTextarea() {
 		var ae = document.activeElement;
-		var caret = ae && ae.tagName === 'TEXTAREA' ? { el: ae, start: ae.selectionStart, end: ae.selectionEnd, value: ae.value } : null;
+		return ae && ae.tagName === 'TEXTAREA' ? ae : null;
+	}
+
+	// caretDelta: Yjs delta of a remote edit to the text being edited locally, used to shift the caret like a real editor
+	function applyRecords(records, replaceAll, caretDelta) {
+		var ta = focusedTextarea();
+		var caret = ta ? { start: ta.selectionStart, end: ta.selectionEnd, value: ta.value } : null;
 		applying = true;
 		try { window.umletCollabApply(records, replaceAll); } finally { applying = false; }
+		if (caret && ta.value !== caret.value) {
+			var start = caret.start, end = caret.end;
+			if (caretDelta) {
+				start = transformIndex(start, caretDelta);
+				end = transformIndex(end, caretDelta);
+			}
+			var len = ta.value.length;
+			ta.focus();
+			ta.setSelectionRange(Math.min(start, len), Math.min(end, len));
+		}
 		// applying may make GWT realign elements (redraw(true)); propagate that like any other local change
 		onLocalChange(true);
-		if (caret && caret.el.value !== caret.value) {
-			var len = caret.el.value.length;
-			caret.el.focus();
-			caret.el.setSelectionRange(Math.min(caret.start, len), Math.min(caret.end, len));
+	}
+
+	function transformIndex(index, delta) {
+		var pos = 0;
+		for (var i = 0; i < delta.length; i++) {
+			var d = delta[i];
+			if (d.retain) pos += d.retain;
+			else if (d.insert) {
+				var n = typeof d.insert === 'string' ? d.insert.length : 1;
+				if (pos <= index) index += n;
+				pos += n;
+			}
+			else if (d.delete) {
+				if (pos < index) index -= Math.min(d.delete, index - pos);
+			}
+			if (pos > index) break;
 		}
+		return index;
 	}
 
 	function onRemoteOps(ops) {
@@ -105,11 +193,45 @@
 			var op = ops[i];
 			if (wins(op, known.get(op.id))) {
 				known.set(op.id, op);
-				accepted.push(op);
+				accepted.push(withText(op));
 			}
 		}
 		if (accepted.length) applyRecords(accepted, false);
 	}
+
+	// make sure a keystroke that is in the textarea but not yet in the model (keyup pending) is merged, not overwritten
+	function captureTypingInProgress() {
+		var ta = focusedTextarea();
+		if (!ta || !ready || !synced) return;
+		var t = texts.get(window.umletCollabPropertiesId());
+		if (t && t.toString() !== ta.value) ydoc.transact(function () { setText(t, ta.value); });
+	}
+
+	function onRemoteY(u) {
+		captureTypingInProgress();
+		Y.applyUpdate(ydoc, fromBase64(u), REMOTE);
+	}
+
+	texts.observeDeep(function (events, tr) {
+		if (tr.origin !== REMOTE || !synced) return;
+		var ids = new Set();
+		var editedId = window.umletCollabPropertiesId();
+		var caretDelta = null;
+		events.forEach(function (e) {
+			if (e.target === texts) e.changes.keys.forEach(function (change, key) { ids.add(key); });
+			else {
+				var id = e.path[0];
+				ids.add(id);
+				if (id === editedId) caretDelta = e.delta;
+			}
+		});
+		var records = [];
+		ids.forEach(function (id) {
+			var rec = known.get(id);
+			if (rec && !rec.deleted) records.push(withText(rec));
+		});
+		if (records.length) applyRecords(records, false, caretDelta);
+	});
 
 	function trySync() {
 		if (!ready || serverState === null) return;
@@ -119,15 +241,23 @@
 			// first join: the room's diagram replaces the local one; an empty room is seeded with the local diagram
 			known = new Map();
 			elements.forEach(function (e) { known.set(e.id, e); });
-			if (elements.some(function (e) { return !e.deleted; })) applyRecords(elements, true);
+			if (elements.some(function (e) { return !e.deleted; })) applyRecords(elements.map(withText), true);
 		}
 		synced = true;
-		if (everSynced) onRemoteOps(elements); // reconnect: merge, then push whatever changed locally while offline
+		if (everSynced) {
+			// reconnect: merge geometry, show texts merged with what others typed meanwhile, then push local changes
+			onRemoteOps(elements);
+			applyRecords(Array.from(known.values()).filter(function (r) { return !r.deleted; }).map(withText), false);
+		}
 		everSynced = true;
+		send({ t: 'y', u: toBase64(Y.encodeStateAsUpdate(ydoc)) }); // text edits made while offline (no-op if none)
 		flush();
 	}
 
+	var offline = false; // debugging aid: umletCollab.debug.setOffline(true) simulates a lost connection
+
 	function connect() {
+		if (offline) return;
 		var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		ws = new WebSocket(proto + '//' + location.host + '/collab?room=' + encodeURIComponent(room));
 		ws.onmessage = function (e) {
@@ -135,16 +265,18 @@
 			if (msg.t === 'hello') {
 				me.id = msg.id;
 				serverState = new Map();
-				(msg.elements || []).forEach(function (e) { serverState.set(e.id, e); });
+				(msg.elements || []).forEach(function (r) { serverState.set(r.id, r); });
+				if (msg.y) Y.applyUpdate(ydoc, fromBase64(msg.y), REMOTE);
 				trySync();
 			}
 			else if (msg.t === 'ops') onRemoteOps(msg.ops);
-			else if (msg.t === 'cursor') drawCursor(msg);
-			else if (msg.t === 'leave') removeCursor(msg.from);
+			else if (msg.t === 'y') onRemoteY(msg.u);
+			else if (msg.t === 'presence') onPresence(msg);
+			else if (msg.t === 'leave') removePeer(msg.from);
 		};
 		ws.onclose = function () {
 			synced = false;
-			setTimeout(connect, 1000);
+			if (!offline) setTimeout(connect, 1000);
 		};
 	}
 
@@ -152,11 +284,20 @@
 		room: room,
 		onReady: function () { ready = true; trySync(); },
 		onLocalChange: onLocalChange,
-		debug: function () { return { synced: synced, elements: Array.from(known.values()) }; }
+		debug: {
+			state: function () {
+				return { synced: synced, elements: Array.from(known.values()), texts: texts.toJSON(), peers: Object.keys(peers).map(function (id) { return { id: id, name: peers[id].name, sel: peers[id].sel }; }) };
+			},
+			setOffline: function (value) {
+				offline = value;
+				if (offline && ws) ws.close();
+				if (!offline) connect();
+			}
+		}
 	};
 
-	// ---- cursors -------------------------------------------------------------
-	// positions are sent in diagram coordinates at default zoom, so scroll position and zoom level don't matter
+	// ---- presence: cursors and selections ----------------------------------------
+	// positions are sent in shared diagram coordinates (default zoom, without the local view offset)
 	function diagramCanvas() {
 		var best = null, bestArea = 0;
 		var all = document.getElementsByTagName('canvas');
@@ -167,51 +308,140 @@
 		return best;
 	}
 
+	// the scrolling viewport around the diagram canvas; overlays are clipped to it
+	function diagramViewport(canvas) {
+		for (var el = canvas.parentElement; el && el !== document.body; el = el.parentElement) {
+			var cs = getComputedStyle(el);
+			if (/(auto|scroll|hidden)/.test(cs.overflow + cs.overflowX + cs.overflowY)) return el;
+		}
+		return document.body;
+	}
+
 	function view() {
 		return ready ? window.umletCollabView() : { zoom: DEFAULT_ZOOM, x: 0, y: 0 };
 	}
 
-	var lastCursor = 0;
-	document.addEventListener('mousemove', function (e) {
+	var pointer = null;        // last local pointer position in shared coordinates
+	var lastPresence = 0;
+	var lastSelectionSent = '';
+	function sendPresence(pointerMoved) {
+		if (!ready || !synced) return;
+		var sel = Array.from(window.umletCollabSelection());
+		var selKey = sel.join(',');
+		if (!pointerMoved && selKey === lastSelectionSent) return;
 		var now = Date.now();
-		if (now - lastCursor < LIVE_INTERVAL_MS) return;
+		if (pointerMoved && now - lastPresence < LIVE_INTERVAL_MS) return;
+		lastPresence = now;
+		lastSelectionSent = selKey;
+		send({ t: 'presence', name: me.name, color: me.color, x: pointer ? pointer.x : null, y: pointer ? pointer.y : null, sel: sel });
+	}
+
+	document.addEventListener('mousemove', function (e) {
 		var c = diagramCanvas();
 		if (!c) return;
-		lastCursor = now;
 		var r = c.getBoundingClientRect();
 		var v = view();
 		var z = v.zoom / DEFAULT_ZOOM;
-		send({ t: 'cursor', x: (e.clientX - r.left - v.x) / z, y: (e.clientY - r.top - v.y) / z, name: me.name, color: me.color });
+		pointer = { x: (e.clientX - r.left - v.x) / z, y: (e.clientY - r.top - v.y) / z };
+		sendPresence(true);
 	}, true);
+	document.addEventListener('scroll', scheduleRender, true);
+	window.addEventListener('resize', scheduleRender);
 
-	var cursors = {};
-	function drawCursor(msg) {
-		var el = cursors[msg.from];
-		if (!el) {
-			el = document.createElement('div');
-			el.className = 'collab-cursor';
-			el.innerHTML = '<svg width="16" height="20" viewBox="0 0 16 20"><path d="M0 0 L0 16 L4 12 L7 19 L10 18 L7 11 L13 11 Z" stroke="white" stroke-width="1"/></svg><span></span>';
-			document.body.appendChild(el);
-			cursors[msg.from] = el;
-		}
-		el.querySelector('path').setAttribute('fill', msg.color);
-		var label = el.querySelector('span');
-		label.textContent = msg.name;
-		label.style.background = msg.color;
-		var c = diagramCanvas();
-		var r = c ? c.getBoundingClientRect() : { left: 0, top: 0 };
-		var v = view();
-		var z = v.zoom / DEFAULT_ZOOM;
-		el.style.transform = 'translate(' + (r.left + v.x + msg.x * z) + 'px,' + (r.top + v.y + msg.y * z) + 'px)';
+	var peers = {}; // id -> {name, color, x, y, sel, cursor, boxes}
+	function onPresence(msg) {
+		var p = peers[msg.from] || (peers[msg.from] = { boxes: {} });
+		p.name = msg.name;
+		p.color = msg.color;
+		p.x = msg.x;
+		p.y = msg.y;
+		p.sel = msg.sel || [];
+		scheduleRender();
 	}
 
-	function removeCursor(id) {
-		if (cursors[id]) { cursors[id].remove(); delete cursors[id]; }
+	function removePeer(id) {
+		var p = peers[id];
+		if (!p) return;
+		if (p.cursor) p.cursor.remove();
+		Object.keys(p.boxes).forEach(function (k) { p.boxes[k].remove(); });
+		delete peers[id];
+	}
+
+	var overlay = document.createElement('div');
+	overlay.className = 'collab-overlay';
+	var renderQueued = false;
+	function scheduleRender() {
+		if (renderQueued) return;
+		renderQueued = true;
+		requestAnimationFrame(render);
+	}
+
+	function render() {
+		renderQueued = false;
+		var canvas = ready && diagramCanvas();
+		if (!canvas) return;
+		if (!overlay.parentNode) document.body.appendChild(overlay);
+		var vp = diagramViewport(canvas).getBoundingClientRect();
+		overlay.style.left = vp.left + 'px';
+		overlay.style.top = vp.top + 'px';
+		overlay.style.width = vp.width + 'px';
+		overlay.style.height = vp.height + 'px';
+		var cr = canvas.getBoundingClientRect();
+		var ox = cr.left - vp.left, oy = cr.top - vp.top; // canvas origin inside the overlay
+		var v = view();
+		var z = v.zoom / DEFAULT_ZOOM;
+
+		Object.keys(peers).forEach(function (id) {
+			var p = peers[id];
+			// cursor
+			if (!p.cursor) {
+				p.cursor = document.createElement('div');
+				p.cursor.className = 'collab-cursor';
+				p.cursor.innerHTML = '<svg width="16" height="20" viewBox="0 0 16 20"><path d="M0 0 L0 16 L4 12 L7 19 L10 18 L7 11 L13 11 Z" stroke="white" stroke-width="1"/></svg><span></span>';
+				overlay.appendChild(p.cursor);
+			}
+			p.cursor.style.display = p.x === null ? 'none' : '';
+			p.cursor.querySelector('path').setAttribute('fill', p.color);
+			var label = p.cursor.querySelector('span');
+			label.textContent = p.name;
+			label.style.background = p.color;
+			p.cursor.style.transform = 'translate(' + (ox + v.x + p.x * z) + 'px,' + (oy + v.y + p.y * z) + 'px)';
+
+			// selection boxes
+			var wanted = {};
+			p.sel.forEach(function (elementId) {
+				var rect = window.umletCollabRect(elementId);
+				if (!rect) return;
+				wanted[elementId] = true;
+				var box = p.boxes[elementId];
+				if (!box) {
+					box = p.boxes[elementId] = document.createElement('div');
+					box.className = 'collab-selection';
+					box.innerHTML = '<span></span>';
+					overlay.appendChild(box);
+				}
+				box.style.borderColor = p.color;
+				box.firstChild.textContent = p.name;
+				box.firstChild.style.background = p.color;
+				box.style.left = (ox + rect.x - 3) + 'px';
+				box.style.top = (oy + rect.y - 3) + 'px';
+				box.style.width = (rect.w + 2) + 'px';
+				box.style.height = (rect.h + 2) + 'px';
+				box.className = 'collab-selection' + (oy + rect.y < 20 ? ' label-below' : ''); // keep the name visible at the top edge
+			});
+			Object.keys(p.boxes).forEach(function (elementId) {
+				if (!wanted[elementId]) { p.boxes[elementId].remove(); delete p.boxes[elementId]; }
+			});
+		});
 	}
 
 	var style = document.createElement('style');
-	style.textContent = '.collab-cursor{position:fixed;left:0;top:0;pointer-events:none;z-index:100000;transition:transform 40ms linear}' +
-		'.collab-cursor span{position:absolute;left:14px;top:16px;color:#fff;font:11px sans-serif;padding:1px 5px;border-radius:3px;white-space:nowrap}';
+	style.textContent = '.collab-overlay{position:fixed;overflow:hidden;pointer-events:none;z-index:100000}' +
+		'.collab-cursor{position:absolute;left:0;top:0;transition:transform 40ms linear}' +
+		'.collab-cursor span{position:absolute;left:14px;top:16px;color:#fff;font:11px sans-serif;padding:1px 5px;border-radius:3px;white-space:nowrap}' +
+		'.collab-selection{position:absolute;border:2px dashed;border-radius:3px}' +
+		'.collab-selection span{position:absolute;left:-2px;top:-17px;color:#fff;font:10px sans-serif;padding:1px 4px;border-radius:3px 3px 3px 0;white-space:nowrap}' +
+		'.collab-selection.label-below span{top:auto;bottom:-17px;border-radius:0 3px 3px 3px}';
 	document.head.appendChild(style);
 
 	connect();

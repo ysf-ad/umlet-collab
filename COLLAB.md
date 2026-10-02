@@ -63,14 +63,14 @@ What runs where:
 - **Applying in place.** Remote changes update the existing Java objects. Your selection, the properties panel and the caret survive, and an element you are dragging is never moved under your mouse.
 - **Zoom and pan stay local.** UMLet has no camera: zooming, panning and canvas realignment move all elements. `DrawPanel` wraps those operations in `beginViewChange()`/`endViewChange()`. The bridge absorbs the shift into a per-user view offset and does not broadcast it. Shared coordinates are always at the default zoom level.
 - **Offline.** If the connection drops, edits continue locally. Text merges on reconnect; geometry is diffed against the last known state and sent.
-- **Import vs. insert.** *File Import* (editor menu) replaces the whole diagram for everyone. **Insert .uxf** (tab bar) merges a file into the current diagram instead, for combining work from separate files. `collab.js` parses the file, rescales it from the file's zoom level, gives every element a new id, and places the group to the right of the existing elements, top-aligned. The elements are then added like a remote change, and the next diff sends them to everyone.
+- **Import vs. insert.** *File Import* (editor menu) replaces the whole diagram for everyone. **File Insert** (editor menu, below File Export) merges a file into the current diagram instead, for combining work from separate files. `collab.js` parses the file, rescales it from the file's zoom level, gives every element a new id, and places the group to the right of the existing elements, top-aligned. The elements are then added like a remote change, and the next diff sends them to everyone.
 
 ### Where the code is
 
 | File | Purpose |
 | --- | --- |
 | `umlet-web/.../collab/CollabBridge.java` | ids, normalized snapshot, apply remote records, view offset, selection/rect lookups |
-| `umlet-web/src/main/webapp/collab.js` | websocket client, diff + versions, Yjs text, cursors and selections, Insert .uxf |
+| `umlet-web/src/main/webapp/collab.js` | websocket client, diff + versions, Yjs text, cursors and selections, File Insert (merge a .uxf) |
 | `umlet-web/.../file/WebFileChangeNotifier.java` | GWT → JS change notifications |
 | `umlet-web/.../view/WebDrawPanelDiagram.java` | announces whole-diagram replacement (import, `?uxf=`) |
 | `umlet-gwt/.../view/DrawPanel.java`, `DrawPanelDiagram.java` | drag/redraw notifications, view-change hooks |

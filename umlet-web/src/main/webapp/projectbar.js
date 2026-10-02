@@ -58,8 +58,14 @@
 
 	// Insert: merge a .uxf file into the current diagram (File Import in the editor menu replaces the diagram instead)
 	var insertInput = el('input', { type: 'file', accept: '.uxf,.xml', multiple: true, hidden: true });
-	var insertButton = tooltip('Add the elements of a .uxf file to this diagram, next to what is already here',
-		el('sl-button', { variant: 'text', size: 'small', className: 'pb-insert' }, [icon('file-earmark-plus', 'prefix'), document.createTextNode('Insert .uxf')]));
+	// shown in the editor's left menu, right below File Import/File Export (added once GWT has rendered the menu)
+	var insertMenuItem = el('div', { title: 'add the elements of a uxf file to this diagram, next to what is already here', text: 'File Insert' });
+	(function addInsertMenuItem() {
+		var exportItem = document.querySelector('[title="export diagram to uxf or as image"]');
+		if (!exportItem) return setTimeout(addInsertMenuItem, 200);
+		insertMenuItem.className = exportItem.className; // same look as the other menu items
+		exportItem.parentNode.insertBefore(insertMenuItem, exportItem.nextSibling);
+	})();
 
 	var statusEl = el('span', { className: 'pb-status' });
 	var themeIcon = el('sl-icon-button', { name: 'moon', label: 'Dark mode' });
@@ -77,7 +83,6 @@
 		addButton,
 		el('div', { className: 'pb-spacer' }),
 		statusEl,
-		insertButton,
 		insertInput,
 		trashDropdown,
 		themeTooltip,
@@ -121,7 +126,7 @@
 		toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 3500);
 	}
 
-	insertButton.addEventListener('click', function () { insertInput.value = ''; insertInput.click(); });
+	insertMenuItem.addEventListener('click', function () { insertInput.value = ''; insertInput.click(); });
 	insertInput.addEventListener('change', function () {
 		Array.prototype.forEach.call(insertInput.files, function (file) {
 			file.text().then(function (text) {

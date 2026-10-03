@@ -155,12 +155,13 @@
 			if (msg.t === 'project') {
 				viewers = msg.viewers || [];
 				onProject(msg.project);
+				avoidSameColor();
 				if (msg.you) { // first message of a (re)connection: tell the others where we are
 					you = msg.you;
 					if (current) announce();
 				}
 			}
-			else if (msg.t === 'viewers') { viewers = msg.viewers || []; renderTabs(); }
+			else if (msg.t === 'viewers') { viewers = msg.viewers || []; renderTabs(); avoidSameColor(); }
 			else if (msg.t === 'added' && msg.requestId === pendingAdd) {
 				// the reply arrives before the updated project, so the tab may not exist yet
 				pendingAdd = null;
@@ -418,8 +419,15 @@
 	function renderHistory(state) {
 		historyMenu.innerHTML = '';
 		historyMenu.appendChild(el('sl-menu-label', { text: 'Restore this diagram to an earlier version' }));
-		if (state === 'loading') return historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [el('sl-spinner', { slot: 'prefix' }), document.createTextNode('Loading…')]));
-		if (state === 'error') return historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [document.createTextNode('Couldn’t load the history')]));
+		// downloading the current diagram works from this browser's copy, even when the server is unreachable
+		var downloadNow = el('sl-menu-item', { value: '__now' }, [icon('download', 'prefix'), document.createTextNode('Download current diagram')]);
+		if (state === 'loading' || state === 'error') {
+			historyMenu.appendChild(state === 'loading'
+				? el('sl-menu-item', { disabled: '' }, [el('sl-spinner', { slot: 'prefix' }), document.createTextNode('Loading…')])
+				: el('sl-menu-item', { disabled: '' }, [document.createTextNode('Couldn’t load the history (offline?)')]));
+			historyMenu.appendChild(el('sl-divider'));
+			return historyMenu.appendChild(downloadNow);
+		}
 		if (!versions.length) historyMenu.appendChild(el('sl-menu-item', { disabled: '' }, [document.createTextNode('No versions yet (saved hourly while editing)')]));
 		versions.forEach(function (v) {
 			var save = el('sl-icon-button', { name: 'download', label: 'Download as .uxf', title: 'Download as .uxf' });
@@ -437,7 +445,7 @@
 			]));
 		});
 		historyMenu.appendChild(el('sl-divider'));
-		historyMenu.appendChild(el('sl-menu-item', { value: '__now' }, [icon('download', 'prefix'), document.createTextNode('Download current diagram')]));
+		historyMenu.appendChild(downloadNow);
 	}
 	historyDropdown.addEventListener('sl-show', function (e) {
 		if (e.target !== historyDropdown) return;
@@ -514,6 +522,22 @@
 	}
 
 	// ---- you, sharing ---------------------------------------------------------------
+	// colours start random (remembered per browser); if someone else in the project has the same one, whichever of
+	// the two has the larger connection id switches to a colour nobody uses, so everyone ends up distinct
+	function avoidSameColor() {
+		if (!you) return;
+		var mine = umletCollab.me.color.toLowerCase();
+		var others = viewers.filter(function (v) { return v.id !== you; });
+		var clash = others.some(function (v) { return String(v.color).toLowerCase() === mine && v.id < you; });
+		if (!clash) return;
+		var taken = others.map(function (v) { return String(v.color).toLowerCase(); });
+		var free = umletCollab.colors.filter(function (c) { return taken.indexOf(c.toLowerCase()) < 0; });
+		var pool = free.length ? free : umletCollab.colors;
+		umletCollab.setColor(pool[Math.floor(Math.random() * pool.length)]);
+		renderMe();
+		if (current) announce(); // the others see the new colour in the tab bar
+	}
+
 	function renderMe() {
 		meDot.style.background = umletCollab.me.color;
 		meLabel.textContent = umletCollab.me.name;

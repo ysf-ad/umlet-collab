@@ -29,7 +29,8 @@
 	// display name and colour are remembered per browser (storage may be unavailable, e.g. in private windows)
 	function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 	function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* not remembered */ } }
-	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa4c2', '#f032e6', '#469990'];
+	// distinct colours that keep white labels readable; the project bar makes sure people in a project don't share one
+	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa4c2', '#f032e6', '#469990', '#9a6324', '#800000', '#808000', '#000075'];
 	var me = {
 		id: null,
 		color: stored('umletcollab.color') || COLORS[Math.floor(Math.random() * COLORS.length)],
@@ -442,6 +443,12 @@
 			if (!room) return false;
 			if (liveTimer) flush(); // a pending drag/redraw change: send it now
 			return offlineChanges || (!!ws && ws.bufferedAmount > 0);
+		},
+		colors: COLORS,
+		setColor: function (color) {
+			me.color = color;
+			store('umletcollab.color', me.color);
+			announcePresence(); // cursors and selections switch colour for the others
 		},
 		setName: function (name) {
 			me.name = String(name).trim().slice(0, 40) || me.name;

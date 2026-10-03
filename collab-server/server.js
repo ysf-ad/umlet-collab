@@ -95,7 +95,8 @@ server.on('upgrade', (req, socket, head) => {
 projectWss.on('connection', (ws, req) => {
 	const id = new URL(req.url, 'http://x').searchParams.get('id');
 	const p = isValidId(id) && projects.get(id);
-	const viewers = (except) => (p ? Array.from(p.clients).filter((c) => c !== except && c.viewing).map((c) => c.viewing) : []);
+	const VIEWER_TIMEOUT_MS = 120000; // clients re-announce every 30 s; silent ones (dead connections) drop off
+	const viewers = (except) => (p ? Array.from(p.clients).filter((c) => c !== except && c.viewing && Date.now() - c.seen < VIEWER_TIMEOUT_MS).map((c) => c.viewing) : []);
 	const message = () => ({ t: 'project', project: p && !p.state.meta.deleted ? p.state.view() : null, viewers: viewers() });
 	const broadcast = (data, except) => { if (p) for (const c of p.clients) if (c !== except && c.readyState === 1) c.send(data); };
 	ws.id = Math.random().toString(36).slice(2, 10);
@@ -106,8 +107,11 @@ projectWss.on('connection', (ws, req) => {
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (!p || p.state.meta.deleted) return;
 		if (msg.t === 'viewing') {
+			const before = JSON.stringify(viewers());
 			ws.viewing = { id: ws.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16) };
-			return broadcast(JSON.stringify({ t: 'viewers', viewers: viewers() }));
+			ws.seen = Date.now();
+			const after = viewers();
+			return JSON.stringify(after) !== before ? broadcast(JSON.stringify({ t: 'viewers', viewers: after })) : undefined;
 		}
 		const { changed, reply, purged } = p.state.handle(msg);
 		if (reply) ws.send(JSON.stringify(reply));

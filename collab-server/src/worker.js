@@ -12,6 +12,7 @@ import { ProjectState, DirectoryState, newId, cleanName, isValidId, roomName } f
 const FLUSH_MS = 1000;            // room state is saved at most once per second
 const TOUCH_INTERVAL_MS = 60000;  // "last edited" in the directory is updated at most once per minute per room
 const MAX_ROOM_NAME = 80;
+const VIEWER_TIMEOUT_MS = 120000; // project viewers re-announce every 30 s
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const directory = (env) => env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
@@ -202,7 +203,10 @@ export class Project extends DurableObject {
 	}
 
 	viewers(except) {
-		return this.ctx.getWebSockets().filter((ws) => ws !== except).map((ws) => ws.deserializeAttachment()).filter((a) => a && a.diagram);
+		// a viewer whose socket died without closing stops sending heartbeats ('viewing' every 30 s) and drops off
+		const cutoff = Date.now() - VIEWER_TIMEOUT_MS;
+		return this.ctx.getWebSockets().filter((ws) => ws !== except).map((ws) => ws.deserializeAttachment())
+			.filter((a) => a && a.diagram && (a.seen || 0) > cutoff).map(({ id, diagram, name, color }) => ({ id, diagram, name, color }));
 	}
 
 	async webSocketMessage(ws, raw) {
@@ -210,8 +214,10 @@ export class Project extends DurableObject {
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (msg.t === 'viewing') {
 			const a = ws.deserializeAttachment();
-			ws.serializeAttachment({ id: a.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16) });
-			broadcast(this.ctx, JSON.stringify({ t: 'viewers', viewers: this.viewers() }));
+			const before = JSON.stringify(this.viewers());
+			ws.serializeAttachment({ id: a.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16), seen: Date.now() });
+			const after = this.viewers();
+			if (JSON.stringify(after) !== before) broadcast(this.ctx, JSON.stringify({ t: 'viewers', viewers: after })); // heartbeats change nothing
 			return;
 		}
 		if (!this.state || this.state.meta.deleted) return;

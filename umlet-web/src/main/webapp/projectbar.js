@@ -247,6 +247,8 @@
 	function announce() {
 		send({ t: 'viewing', diagram: current, name: umletCollab.me.name, color: umletCollab.me.color });
 	}
+	// heartbeat so the server can drop viewers whose connection died without closing (see project viewers())
+	setInterval(function () { if (current && ws && ws.readyState === 1) announce(); }, 30000);
 
 	function updateTitle() {
 		if (project) document.title = diagramName(current) + ' – ' + project.name + ' – UMLet';

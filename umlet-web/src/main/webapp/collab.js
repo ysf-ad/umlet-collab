@@ -529,6 +529,7 @@
 		p.x = msg.x;
 		p.y = msg.y;
 		p.sel = msg.sel || [];
+		p.seen = Date.now();
 		scheduleRender();
 		if (isNew) announcePresence(); // let a newcomer see us right away (they answer once in turn, then it stops)
 	}
@@ -538,6 +539,16 @@
 		lastPresence = 0;
 		sendPresence(false);
 	}
+
+	// heartbeat: everyone re-announces regularly, and peers not heard from for a while are dropped, so someone whose
+	// laptop slept or whose connection died without a 'leave' does not linger as a ghost cursor/selection
+	var HEARTBEAT_MS = 20000, PEER_TIMEOUT_MS = 75000;
+	setInterval(function () {
+		if (ws && ws.readyState === 1) announcePresence();
+		var now = Date.now();
+		Object.keys(peers).forEach(function (id) { if (now - (peers[id].seen || 0) > PEER_TIMEOUT_MS) removePeer(id); });
+		scheduleRender();
+	}, HEARTBEAT_MS);
 
 	function removePeer(id) {
 		var p = peers[id];

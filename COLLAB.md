@@ -82,6 +82,10 @@ What runs where:
 | `collab-server/src/worker.js`, `wrangler.jsonc` | Cloudflare Worker + Durable Object |
 | `collab-server/server.js` | Node relay for local use/self-hosting (in-memory rooms) |
 
+## Load testing
+
+`node scripts/load-test.js <baseUrl> [diagrams] [clientsPerDiagram] [elements] [seconds]` (from `collab-server/`) simulates many clients dragging elements in many diagrams and reports relay latency (client 0 stamps a probe element, the others measure when it arrives) and whether fresh clients see the stored state. Run it against a local `npx wrangler dev --persist-to <folder outside OneDrive>` (real Durable Object behaviour, no Cloudflare quota used) or `node server.js`, never against the shared production instance. Local results (2026-10-03, one Windows PC also running other jobs): 20 diagrams x 3 clients x 50 elements: p50 6 ms, p95 about 40 ms; 40 diagrams x 3 clients: p50 11 ms, p95 89 ms; 20 diagrams x 8 clients (160 users): p95 57 ms. No errors, no dropped connections, stored state correct. One early run showed a 10 s stall that did not reproduce in five repeats.
+
 ## Known limitations
 
 - There is no undo/redo in UMLetino, so there is no per-user undo either.

@@ -58,13 +58,13 @@
 
 	// Insert: merge a .uxf file into the current diagram (File Import in the editor menu replaces the diagram instead)
 	var insertInput = el('input', { type: 'file', accept: '.uxf,.xml', multiple: true, hidden: true });
-	// shown in the editor's left menu, right below File Import/File Export (added once GWT has rendered the menu)
+	// shown in the editor's left menu between File Import and File Export (added once GWT has rendered the menu)
 	var insertMenuItem = el('div', { title: 'add the elements of a uxf file to this diagram, next to what is already here', text: 'File Insert' });
 	(function addInsertMenuItem() {
 		var exportItem = document.querySelector('[title="export diagram to uxf or as image"]');
 		if (!exportItem) return setTimeout(addInsertMenuItem, 200);
 		insertMenuItem.className = exportItem.className; // same look as the other menu items
-		exportItem.parentNode.insertBefore(insertMenuItem, exportItem.nextSibling);
+		exportItem.parentNode.insertBefore(insertMenuItem, exportItem);
 	})();
 
 	var historyButton = el('sl-button', { slot: 'trigger', variant: 'text', size: 'small', caret: '' }, [icon('clock-history', 'prefix'), document.createTextNode('History')]);

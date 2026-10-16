@@ -52,7 +52,7 @@ await esbuild.build({
 });
 
 // Shoelace (MIT) UI components for the project bar and project list: one bundle, two themes, the icons we use
-const SHOELACE_ICONS = ['chevron-left', 'chevron-down', 'plus-lg', 'x-lg', 'check2', 'pencil', 'grid', 'trash3', 'arrow-counterclockwise',
+const SHOELACE_ICONS = ['diagram-3', 'chevron-left', 'chevron-down', 'plus-lg', 'x-lg', 'check2', 'pencil', 'grid', 'trash3', 'arrow-counterclockwise',
 	'sun', 'moon', 'link-45deg', 'folder2', 'person', 'search', 'clock-history', 'download'];
 const shoelace = path.join(root, 'node_modules', '@shoelace-style', 'shoelace', 'dist');
 const shoelaceOut = path.join(dist, 'vendor', 'shoelace');

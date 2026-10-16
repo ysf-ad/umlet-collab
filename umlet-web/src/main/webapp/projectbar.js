@@ -50,6 +50,16 @@
 	var projectDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-start' }, [projectButton, projectMenu]);
 
 	var tabsEl = el('div', { className: 'pb-tabs', role: 'tablist' });
+	// more tabs than fit: the strip scrolls (thin scrollbar under the tabs) and the mouse wheel scrolls it sideways
+	tabsEl.addEventListener('wheel', function (e) {
+		if (tabsEl.scrollWidth <= tabsEl.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+		tabsEl.scrollLeft += e.deltaY;
+		e.preventDefault();
+	}, { passive: false });
+	// every diagram in a menu, for jumping to one that is scrolled out of view
+	var diagramsMenu = el('sl-menu');
+	var diagramsDropdown = el('sl-dropdown', { hoist: '', distance: '4', placement: 'bottom-start', className: 'pb-diagrams' }, [
+		el('sl-icon-button', { slot: 'trigger', name: 'chevron-down', label: 'All diagrams', title: 'All diagrams' }), diagramsMenu]);
 	var addButton = tooltip('New diagram', el('sl-icon-button', { name: 'plus-lg', label: 'New diagram', className: 'pb-add' }));
 
 	var trashButton = el('sl-button', { slot: 'trigger', variant: 'text', size: 'small', caret: '' }, [icon('trash3', 'prefix'), el('span', { className: 'pb-trash-label' })]);
@@ -84,6 +94,7 @@
 		el('div', { className: 'pb-sep' }),
 		projectDropdown,
 		tabsEl,
+		diagramsDropdown,
 		addButton,
 		el('div', { className: 'pb-spacer' }),
 		statusEl,
@@ -313,8 +324,23 @@
 			});
 			tabsEl.appendChild(tab);
 		});
-		var activeTab = tabsEl.querySelector('.active');
-		if (activeTab && activeTab.scrollIntoView) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+		revealActiveTab();
+		diagramsMenu.innerHTML = '';
+		diagramsMenu.appendChild(el('sl-menu-label', { text: 'Diagrams (' + project.diagrams.length + ')' }));
+		project.diagrams.forEach(function (d) {
+			diagramsMenu.appendChild(el('sl-menu-item', { value: d.id }, [icon(d.id === current ? 'check2' : 'diagram-3', 'prefix'), document.createTextNode(d.name)]));
+		});
+	}
+
+	// scrolls only the tab strip (not the page) so the open diagram's tab is visible
+	function revealActiveTab() {
+		requestAnimationFrame(function () {
+			var tab = tabsEl.querySelector('.active');
+			if (!tab) return;
+			var left = tab.offsetLeft, right = left + tab.offsetWidth;
+			if (left < tabsEl.scrollLeft) tabsEl.scrollLeft = left;
+			else if (right > tabsEl.scrollLeft + tabsEl.clientWidth) tabsEl.scrollLeft = right - tabsEl.clientWidth;
+		});
 	}
 
 	// inline editing for diagram and project names
@@ -470,6 +496,11 @@
 		}).catch(function (err) { showToast('Restore failed: ' + err.message); });
 	});
 
+	diagramsMenu.addEventListener('sl-select', function (e) {
+		var id = e.detail.item.value;
+		if (id && id !== current) switchTo(id, true);
+	});
+
 	trashMenu.addEventListener('sl-select', function (e) {
 		send({ t: 'restore', id: e.detail.item.value });
 	});
@@ -565,7 +596,9 @@
 		'#projectbar{position:fixed;left:0;right:0;top:0;height:' + BAR_HEIGHT + 'px;display:flex;align-items:center;gap:var(--sl-spacing-2x-small);padding:0 var(--sl-spacing-x-small);box-sizing:border-box;background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-900);border-bottom:1px solid var(--sl-color-neutral-200);font-family:var(--sl-font-sans);font-size:var(--sl-font-size-small);z-index:1000;user-select:none}',
 		'#projectbar .pb-sep{width:1px;height:20px;background:var(--sl-color-neutral-200);margin:0 var(--sl-spacing-2x-small)}',
 		'#projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-semibold);max-width:220px;overflow:hidden;text-overflow:ellipsis}',
-		'#projectbar .pb-tabs{position:relative;z-index:0;display:flex;align-items:stretch;align-self:stretch;gap:2px;margin-left:var(--sl-spacing-x-small);overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:none}',
+		'#projectbar .pb-tabs{position:relative;z-index:0;display:flex;align-items:stretch;align-self:stretch;gap:2px;margin-left:var(--sl-spacing-x-small);overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:thin;scrollbar-color:var(--sl-color-neutral-300) transparent}',
+		'#projectbar .pb-tabs::-webkit-scrollbar{height:4px}',
+		'#projectbar .pb-tabs::-webkit-scrollbar-thumb{background:var(--sl-color-neutral-300);border-radius:2px}',
 		'#projectbar sl-button[variant=text]::part(base){color:var(--sl-color-neutral-700)}',
 		'#projectbar sl-button[variant=text]::part(base):hover{color:var(--sl-color-neutral-900);background:var(--sl-color-neutral-100)}',
 		'#projectbar sl-icon-button::part(base){color:var(--sl-color-neutral-600)}',
@@ -595,7 +628,7 @@
 		'.pb-menu-hint{color:var(--sl-color-neutral-500);font-size:var(--sl-font-size-x-small)}',
 		'sl-menu{min-width:240px;max-width:340px;max-height:70vh;overflow-y:auto}',
 		'.pb-input{font:inherit;font-weight:var(--sl-font-weight-normal);width:150px;padding:2px 6px;border:1px solid var(--sl-color-primary-600);border-radius:var(--sl-border-radius-small);background:var(--sl-color-neutral-0);color:var(--sl-color-neutral-900);outline:none;box-shadow:0 0 0 2px var(--sl-color-primary-100)}',
-		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
+		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-diagrams,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
 		'body.pb-standalone #projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-normal);color:var(--sl-color-neutral-600)}',
 		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 12) + 'px;transform:translateX(-50%);background:var(--sl-color-neutral-800);color:var(--sl-color-neutral-0);padding:var(--sl-spacing-x-small) var(--sl-spacing-medium);border-radius:var(--sl-border-radius-medium);font:var(--sl-font-size-small) var(--sl-font-sans);box-shadow:var(--sl-shadow-large);opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001}',
 		'#pb-toast.visible{opacity:1}',

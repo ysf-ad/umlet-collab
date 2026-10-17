@@ -45,6 +45,10 @@
 	var everSynced = false;
 	var applying = false;     // true while applying remote changes (prevents echo)
 	var known = new Map();    // id -> record incl. version, nonce, deleted
+	// id -> {rec, c}: how an applied record looks in the local snapshot. Placing an element can nudge it (autoresize
+	// re-centers actors on the grid of the local zoom level), and that nudge must not be sent back as an edit, or the
+	// element drifts a grid step every time the diagram is opened. Only changes from this local look are edits.
+	var applied = new Map();
 	var liveTimer = null;
 	var lastLiveFlush = 0;
 	var offlineChanges = false; // local edits made while disconnected that the server hasn't received yet
@@ -115,7 +119,7 @@
 				var t = texts.get(r.id);
 				if (t) setText(t, r.pa);
 				else if (!cur || cur.deleted || cur.pa !== r.pa) texts.set(r.id, new Y.Text(r.pa));
-				if (!synced || (cur && !cur.deleted && content(cur) === content(r))) continue;
+				if (!synced || (cur && !cur.deleted && (content(cur) === content(r) || appliedLook(r.id, cur) === content(r)))) continue;
 				// pa is included so a late joiner can create the element even before its text arrives
 				var op = { id: r.id, type: r.type, x: r.x, y: r.y, w: r.w, h: r.h, pa: r.pa, aa: r.aa, deleted: false, version: (cur ? cur.version : 0) + 1, nonce: rand() };
 				known.set(op.id, op);
@@ -133,6 +137,11 @@
 		if (ops.length) send({ t: 'ops', ops: ops });
 		sendPresence(false);
 		scheduleRender();
+	}
+
+	function appliedLook(id, rec) {
+		var a = applied.get(id);
+		return a && a.rec === rec ? a.c : null;
 	}
 
 	function onLocalChange(live) {
@@ -156,6 +165,12 @@
 		var caret = ta ? { start: ta.selectionStart, end: ta.selectionEnd, value: ta.value } : null;
 		applying = true;
 		try { window.umletCollabApply(records, replaceAll); } finally { applying = false; }
+		var snapshot = window.umletCollabSnapshot();
+		var ids = new Set(records.map(function (r) { return r.id; }));
+		snapshot.forEach(function (r) {
+			var rec = known.get(r.id);
+			if (ids.has(r.id) && rec && !rec.deleted) applied.set(r.id, { rec: rec, c: content(r) });
+		});
 		if (caret && ta.value !== caret.value) {
 			var start = caret.start, end = caret.end;
 			if (caretDelta) {
@@ -424,6 +439,7 @@
 		everSynced = false;
 		serverState = null;
 		known = new Map();
+		applied = new Map();
 		initDoc();
 		if (ready) {
 			applying = true;

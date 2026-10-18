@@ -51,6 +51,64 @@ public class CollabBridge {
 	private final Map<GridElement, String> idByElement = new IdentityHashMap<GridElement, String>();
 	private final Map<String, GridElement> elementById = new HashMap<String, GridElement>();
 
+	/*
+	 * The shared record each element was last synced with, and how the element looked locally at that point.
+	 * Placing an element is not exact: zoom rounding and autoresize (actors re-center on the local zoom level's grid,
+	 * dragging attached relations along) nudge it. Converting the nudged element back would report a change nobody
+	 * made, and the element drifts a grid step each time the diagram is opened or zoomed. So while an element still
+	 * looks as it did when it was synced, snapshot() reports the synced record unchanged; only real edits produce
+	 * new values. Applying remote records and view changes (zoom, pan) update the local look, not the record.
+	 */
+	private static class Synced {
+		final int x, y, w, h;
+		final String aa;
+		Rectangle look;
+		String lookAa;
+
+		Synced(int x, int y, int w, int h, String aa, GridElement ge) {
+			this.x = x;
+			this.y = y;
+			this.w = w;
+			this.h = h;
+			this.aa = aa;
+			lookAt(ge);
+		}
+
+		void lookAt(GridElement ge) {
+			look = ge.getRectangle().copy();
+			lookAa = ge.getAdditionalAttributes();
+		}
+
+		boolean looksLike(GridElement ge) {
+			return look.equals(ge.getRectangle()) && lookAa.equals(ge.getAdditionalAttributes());
+		}
+	}
+
+	private final Map<GridElement, Synced> synced = new IdentityHashMap<GridElement, Synced>();
+	private List<GridElement> untouchedBeforeViewChange;
+
+	/* elements that still look as they did when last synced (nothing local changed them) */
+	private List<GridElement> untouched() {
+		List<GridElement> result = new ArrayList<GridElement>();
+		for (GridElement ge : panel().getDiagram().getGridElements()) {
+			Synced s = synced.get(ge);
+			if (s != null && s.looksLike(ge)) {
+				result.add(ge);
+			}
+		}
+		return result;
+	}
+
+	/* after a change that was not a local edit: the untouched elements keep their records, with their new look */
+	private void relook(List<GridElement> untouched) {
+		for (GridElement ge : untouched) {
+			Synced s = synced.get(ge);
+			if (s != null) {
+				s.lookAt(ge);
+			}
+		}
+	}
+
 	public CollabBridge(MainView mainView) {
 		this.mainView = mainView;
 		current = this;
@@ -61,6 +119,7 @@ public class CollabBridge {
 	}
 
 	public void beforeViewChange() {
+		untouchedBeforeViewChange = untouched();
 		List<GridElement> elements = panel().getDiagram().getGridElements();
 		viewRef = elements.isEmpty() ? null : elements.get(0);
 		if (viewRef != null) {
@@ -77,6 +136,10 @@ public class CollabBridge {
 			viewY = viewRef.getRectangle().getY() - (int) Math.round(viewRefSharedY * toLocal);
 		}
 		viewRef = null;
+		if (untouchedBeforeViewChange != null) {
+			relook(untouchedBeforeViewChange);
+			untouchedBeforeViewChange = null;
+		}
 	}
 
 	public void pointerReleased(boolean moved) {
@@ -97,6 +160,7 @@ public class CollabBridge {
 	public void resetView() {
 		viewX = 0;
 		viewY = 0;
+		synced.clear();
 	}
 
 	private DrawPanelDiagram panel() {
@@ -130,12 +194,15 @@ public class CollabBridge {
 			}
 			// plain arithmetic: copying the element and zooming the copy runs element logic (e.g. re-centering) that
 			// makes the result depend on the zoom level. Relation points (additional attributes) are zoom independent.
-			Rectangle r = ge.getRectangle();
-			double toDefault = SharedConstants.DEFAULT_GRID_SIZE / (double) zoom;
-			result.push(record(idOf(ge), ge.getId().name(),
-					(int) Math.round((r.getX() - viewX) * toDefault), (int) Math.round((r.getY() - viewY) * toDefault),
-					(int) Math.round(r.getWidth() * toDefault), (int) Math.round(r.getHeight() * toDefault),
-					ge.getPanelAttributes(), ge.getAdditionalAttributes()));
+			Synced s = synced.get(ge);
+			if (s == null || !s.looksLike(ge)) { // new or edited locally: its current look defines the record
+				Rectangle r = ge.getRectangle();
+				double toDefault = SharedConstants.DEFAULT_GRID_SIZE / (double) zoom;
+				s = new Synced((int) Math.round((r.getX() - viewX) * toDefault), (int) Math.round((r.getY() - viewY) * toDefault),
+						(int) Math.round(r.getWidth() * toDefault), (int) Math.round(r.getHeight() * toDefault), ge.getAdditionalAttributes(), ge);
+				synced.put(ge, s);
+			}
+			result.push(record(idOf(ge), ge.getId().name(), s.x, s.y, s.w, s.h, ge.getPanelAttributes(), s.aa));
 		}
 		return result;
 	}
@@ -154,6 +221,8 @@ public class CollabBridge {
 		List<GridElement> toRemove = new ArrayList<GridElement>();
 		Set<String> seen = new HashSet<String>();
 		boolean updatePropertiesPanel = false;
+		List<GridElement> untouched = untouched(); // attached relations may be dragged along by the applied elements
+		Map<GridElement, JavaScriptObject> appliedRecords = new IdentityHashMap<GridElement, JavaScriptObject>();
 
 		for (int i = 0; i < records.length(); i++) {
 			JavaScriptObject rec = records.get(i);
@@ -206,6 +275,7 @@ public class CollabBridge {
 				// elements cache their drawing; without this a relation keeps drawing its old shape (and is not
 				// clickable where it is drawn, because hit testing already uses the new points)
 				existing.updateModelFromText();
+				appliedRecords.put(existing, rec);
 			}
 			else { // new element, or the element type changed
 				if (inDiagram) {
@@ -213,6 +283,7 @@ public class CollabBridge {
 				}
 				register(incoming, id);
 				toAdd.add(incoming);
+				appliedRecords.put(incoming, rec);
 			}
 		}
 
@@ -233,6 +304,15 @@ public class CollabBridge {
 			panel.updatePropertiesPanelWithSelectedElement();
 		}
 		panel.redraw(!toAdd.isEmpty() || !toRemove.isEmpty());
+
+		relook(untouched);
+		for (Map.Entry<GridElement, JavaScriptObject> e : appliedRecords.entrySet()) {
+			JavaScriptObject rec = e.getValue();
+			synced.put(e.getKey(), new Synced(num(rec, "x"), num(rec, "y"), num(rec, "w"), num(rec, "h"), str(rec, "aa"), e.getKey()));
+		}
+		for (GridElement ge : toRemove) {
+			synced.remove(ge);
+		}
 	}
 
 	private static GridElement createElement(JavaScriptObject rec, Diagram diagram, int zoom) {

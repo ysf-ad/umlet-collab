@@ -106,10 +106,21 @@
 		shareButton
 	]);
 	var toast = el('div', { id: 'pb-toast', role: 'status' });
+	// covers the editor while collab.js loads the diagram (html.collab-loading), so a diagram still loading doesn't look empty
+	var loadingText = el('span', { text: 'Loading diagram…' });
+	var loading = el('div', { id: 'pb-loading', role: 'status' }, [el('sl-spinner'), loadingText]);
+	var slowTimer = null;
+	new MutationObserver(function () {
+		clearTimeout(slowTimer);
+		loadingText.textContent = 'Loading diagram…';
+		if (document.documentElement.classList.contains('collab-loading')) slowTimer = setTimeout(function () { loadingText.textContent = 'Still loading… (slow connection?)'; }, 8000);
+	}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+	if (document.documentElement.classList.contains('collab-loading')) slowTimer = setTimeout(function () { loadingText.textContent = 'Still loading… (slow connection?)'; }, 8000);
 
 	function mount() {
 		document.body.appendChild(bar);
 		document.body.appendChild(toast);
+		document.body.appendChild(loading);
 		document.body.classList.add('has-projectbar');
 		if (standalone) {
 			document.body.classList.add('pb-standalone');
@@ -632,6 +643,9 @@
 		'body.pb-standalone #projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-normal);color:var(--sl-color-neutral-600)}',
 		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 12) + 'px;transform:translateX(-50%);background:var(--sl-color-neutral-800);color:var(--sl-color-neutral-0);padding:var(--sl-spacing-x-small) var(--sl-spacing-medium);border-radius:var(--sl-border-radius-medium);font:var(--sl-font-size-small) var(--sl-font-sans);box-shadow:var(--sl-shadow-large);opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001}',
 		'#pb-toast.visible{opacity:1}',
+		'#pb-loading{display:none;position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;align-items:center;justify-content:center;gap:var(--sl-spacing-small);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-600);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:998}',
+		'html.collab-loading #pb-loading{display:flex}',
+		'#pb-loading sl-spinner{font-size:1.5rem}',
 		'#pb-missing{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sl-spacing-medium);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-700);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:999}',
 		'body.pb-missing #projectbar .pb-add,body.pb-missing #projectbar .pb-share{display:none}'
 	].join('\n');

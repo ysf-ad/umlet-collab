@@ -49,6 +49,10 @@
 	// re-centers actors on the grid of the local zoom level), and that nudge must not be sent back as an edit, or the
 	// element drifts a grid step every time the diagram is opened. Only changes from this local look are edits.
 	var applied = new Map();
+
+	// html.collab-loading until the room's diagram is shown (the project bar draws a loading overlay for it)
+	function setLoading(on) { document.documentElement.classList.toggle('collab-loading', on); }
+	setLoading(true);
 	var liveTimer = null;
 	var lastLiveFlush = 0;
 	var offlineChanges = false; // local edits made while disconnected that the server hasn't received yet
@@ -383,6 +387,7 @@
 			if (elements.some(function (e) { return !e.deleted; })) applyRecords(elements.map(withText), true);
 		}
 		synced = true;
+		setLoading(false);
 		if (everSynced) {
 			// reconnect: merge geometry, show texts merged with what others typed meanwhile, then push local changes
 			onRemoteOps(elements);
@@ -446,6 +451,7 @@
 			try { window.umletCollabApply([{ id: '_diagram', type: '_diagram', pa: '' }], true); } finally { applying = false; }
 		}
 		room = newRoom;
+		setLoading(true);
 		connect();
 	}
 

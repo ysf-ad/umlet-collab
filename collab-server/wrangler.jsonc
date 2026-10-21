@@ -8,10 +8,11 @@
 	"routes": [{ "pattern": "umlet.yousifaldakoki.com", "custom_domain": true }],
 	"workers_dev": true,
 	// MAX_PROJECTS_PER_IP: new projects one network (IP address) may create per 30 days.
-	// TURNSTILE_SITE_KEY: the public key of a Cloudflare Turnstile widget (dashboard > Turnstile). The captcha only turns on once
-	// its secret exists too: npx wrangler secret put TURNSTILE_SECRET. Optional: npx wrangler secret put QUOTA_SALT (random text
-	// mixed into the hashed network addresses of the quota).
-	"vars": { "MAX_PROJECTS_PER_IP": "5", "TURNSTILE_SITE_KEY": "" },
+	// TURNSTILE_SITE_KEY: the public key of the Cloudflare Turnstile widget. The captcha only turns on once its secret exists too:
+	// the Worker secret TURNSTILE_SECRET. TURNSTILE_HOSTNAMES: when set, a captcha token only counts if it was solved on one of
+	// these hostnames for the create_project action. Optional secret QUOTA_SALT: random text mixed into the hashed network
+	// addresses of the quota.
+	"vars": { "MAX_PROJECTS_PER_IP": "5", "TURNSTILE_SITE_KEY": "0x4AAAAAAFep48Ip1HXmdTxV", "TURNSTILE_HOSTNAMES": "umlet.yousifaldakoki.com" },
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS"

@@ -89,6 +89,7 @@
 				timer = setTimeout(function () { finish(reject, new Error('The captcha took too long. Reload the page and try again.')); }, 60000);
 				widget = turnstile.render(holder, {
 					sitekey: siteKey,
+					action: 'create_project',
 					appearance: 'interaction-only',
 					callback: function (token) { finish(resolve, token); },
 					'error-callback': function () { finish(reject, new Error('The captcha could not run. Reload the page and try again.')); },

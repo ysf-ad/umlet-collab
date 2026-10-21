@@ -10,6 +10,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { RoomState, toBase64, fromBase64, MAX_VERSIONS } from './room.js';
 import { ProjectState, newProjectId, cleanName, isValidId, roomName } from './project.js';
 import { LIMITS, takeQuota, networkOf } from './limits.js';
+import { captchaAccepted, parseHostnames } from './captcha.js';
 
 const FLUSH_MS = 1000;            // room state is saved at most once per second
 const TOUCH_INTERVAL_MS = 60000;  // a project's "last edited" time is updated at most once per minute per room
@@ -35,15 +36,16 @@ async function hashNetwork(network, salt) {
 }
 
 /* true: passed, false: failed, null: could not be checked */
-async function checkCaptcha(secret, token, ip) {
-	if (typeof token !== 'string' || !token) return false;
+async function checkCaptcha(env, token, ip) {
+	if (typeof token !== 'string' || !token || token.length > 2048) return false;
 	try {
 		const form = new FormData();
-		form.append('secret', secret);
+		form.append('secret', env.TURNSTILE_SECRET);
 		form.append('response', token);
 		if (ip) form.append('remoteip', ip);
-		const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form });
-		return !!(await r.json()).success;
+		const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form, signal: AbortSignal.timeout(10000) });
+		if (!r.ok) return null;
+		return captchaAccepted(await r.json(), parseHostnames(env.TURNSTILE_HOSTNAMES));
 	} catch {
 		return null;
 	}
@@ -53,7 +55,7 @@ async function createProject(request, env) {
 	const body = await request.json().catch(() => ({}));
 	const ip = request.headers.get('CF-Connecting-IP'); // always set by Cloudflare; absent in local development, where nothing is limited
 	if (env.TURNSTILE_SECRET) { // the captcha is switched on by setting its secret
-		const passed = await checkCaptcha(env.TURNSTILE_SECRET, body.token, ip);
+		const passed = await checkCaptcha(env, body.token, ip);
 		if (passed === null) return json({ error: 'captcha_unavailable', message: 'Couldn’t check the captcha right now. Try again in a moment.' }, 503);
 		if (!passed) return json({ error: 'captcha', message: 'The captcha check failed. Reload the page and try again.' }, 400);
 	}

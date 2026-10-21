@@ -2,9 +2,46 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="robots" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Projects – UMLet</title>
+    <title>UMLet Collab – Free real-time collaborative UML diagram editor online</title>
+    <meta name="description" content="Draw UML diagrams together in your browser. A free, open-source, real-time collaborative UML editor based on UMLet: class, sequence, use case and activity diagrams, live cursors, no sign-up.">
+    <meta name="keywords" content="UMLet, UMLet online, UML editor, UML diagram tool, collaborative UML, real-time collaboration, online UML diagram maker, free UML tool, open source UML, class diagram, sequence diagram, use case diagram, activity diagram, UXF">
+    <link rel="canonical" href="https://umlet.yousifaldakoki.com/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="UMLet Collab">
+    <meta property="og:title" content="UMLet Collab – real-time collaborative UML diagrams">
+    <meta property="og:description" content="Create a project, share the link and edit UML diagrams together live. Free and open source, no sign-up.">
+    <meta property="og:url" content="https://umlet.yousifaldakoki.com/">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="UMLet Collab – real-time collaborative UML diagrams">
+    <meta name="twitter:description" content="Create a project, share the link and edit UML diagrams together live. Free and open source, no sign-up.">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "name": "UMLet Collab",
+          "url": "https://umlet.yousifaldakoki.com/",
+          "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "Any (web browser)",
+          "description": "A free, open-source, real-time collaborative UML diagram editor based on UMLet. Edit class, sequence, use case and activity diagrams together in the browser.",
+          "isAccessibleForFree": true,
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "codeRepository": "https://github.com/ysf-ad/umlet-collab"
+        },
+        {
+          "@type": "FAQPage",
+          "mainEntity": [
+            { "@type": "Question", "name": "Do I need an account to use UMLet Collab?", "acceptedAnswer": { "@type": "Answer", "text": "No. Create a project and send its link. Anyone with the link can open and edit it." } },
+            { "@type": "Question", "name": "Is it free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. It is free to use and open source." } },
+            { "@type": "Question", "name": "Can several people edit a UML diagram at the same time?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Everyone sees each other's cursors and selections, and changes appear as they happen." } },
+            { "@type": "Question", "name": "Can I import and export UMLet diagrams?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Diagrams are standard UMLet .uxf files. You can import them and export .uxf, PNG, SVG or PDF." } }
+          ]
+        }
+      ]
+    }
+    </script>
     <link rel="icon" type="image/png" sizes="32x32" href="umlet_logo32.png">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <script>
@@ -33,6 +70,14 @@
         .how span { color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); line-height: 1.4; display: block; }
         @media (max-width: 640px) { .how { grid-template-columns: 1fr; } }
         .note { margin: var(--sl-spacing-small) 0; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
+        .about { margin-top: var(--sl-spacing-x-large); border: 1px solid var(--sl-color-neutral-200); border-radius: var(--sl-border-radius-large); background: var(--sl-color-neutral-0); }
+        .about > summary { cursor: pointer; padding: var(--sl-spacing-medium); font-weight: var(--sl-font-weight-semibold); }
+        .about .body { padding: 0 var(--sl-spacing-medium) var(--sl-spacing-medium); color: var(--sl-color-neutral-700); font-size: var(--sl-font-size-small); line-height: 1.6; }
+        .about h2 { font-size: var(--sl-font-size-medium); margin: var(--sl-spacing-large) 0 var(--sl-spacing-2x-small); color: var(--sl-color-neutral-900); }
+        .about h3 { font-size: var(--sl-font-size-small); margin: var(--sl-spacing-small) 0 0; color: var(--sl-color-neutral-900); }
+        .about p, .about ul { margin: var(--sl-spacing-2x-small) 0; }
+        .about ul { list-style: disc; padding-left: var(--sl-spacing-large); background: none; border: 0; border-radius: 0; overflow: visible; }
+        .about li { display: list-item; border: 0; padding: 0; }
         footer { margin-top: var(--sl-spacing-2x-large); color: var(--sl-color-neutral-500); font-size: var(--sl-font-size-small); text-align: center; }
         footer a { color: inherit; }
         form { display: flex; gap: var(--sl-spacing-x-small); margin-bottom: var(--sl-spacing-x-large); }
@@ -83,6 +128,49 @@
         <summary id="trash-summary">Recently deleted</summary>
         <p class="note">Deleted projects can be restored for 30 days. After that they are erased for good.</p>
         <ul id="deleted"></ul>
+    </details>
+
+    <details class="about" id="about">
+        <summary>About UMLet Collab: what it is, what it can do, FAQ</summary>
+        <div class="body">
+            <h2>A real-time collaborative UML editor in your browser</h2>
+            <p>UMLet Collab is a free online UML diagram tool for teams, students and anyone who draws diagrams with other people. It is built on <a href="https://www.umlet.com" target="_blank" rel="noopener">UMLet</a>, the popular open-source UML editor, and its web version UMLetino, and adds live collaboration: several people edit the same diagram at the same moment and see each other’s cursors, selections and changes as they happen. There is nothing to install and no account to create.</p>
+
+            <h2>What you can draw</h2>
+            <p>It keeps UMLet’s fast, text-driven way of drawing and its palettes for the standard UML diagram types:</p>
+            <ul>
+                <li>class diagrams and object diagrams</li>
+                <li>sequence diagrams</li>
+                <li>use case diagrams</li>
+                <li>activity diagrams and state machine diagrams</li>
+                <li>package, component and deployment diagrams</li>
+                <li>plus free-form boxes, notes and your own custom elements</li>
+            </ul>
+
+            <h2>How collaboration works</h2>
+            <p>Create a project and copy its link with the Share button. Anyone who opens the link joins the project: they see the same diagrams, with a coloured cursor and name for every person, and edits sync instantly. When two people type in the same element, their text is merged rather than overwritten. Everything is saved automatically on the server, so you can close the tab and come back to your diagrams later, and each diagram keeps a version history you can restore from.</p>
+
+            <h2>Projects with many diagrams</h2>
+            <p>A project holds up to 40 diagrams, shown as tabs. You can add, rename, reorder and delete diagrams, and bring deleted ones back. Your own UMLet files work too: import a <code>.uxf</code> file, or export a diagram as <code>.uxf</code>, PNG, SVG or PDF.</p>
+
+            <h2>Privacy, limits and housekeeping</h2>
+            <ul>
+                <li>Projects are private by default. They are not listed or searchable anywhere, and only people who have the link can open them, so share the link only with people you want to edit with.</li>
+                <li>Anyone with a project’s link can edit and delete it.</li>
+                <li>Projects nobody opens for 2 months are deleted, and deleted projects are erased for good after 30 days. Until then they can be restored from their link.</li>
+                <li>To keep it free for everyone, a network can create up to 5 new projects a month.</li>
+            </ul>
+
+            <h2>Frequently asked questions</h2>
+            <h3>Do I need an account?</h3>
+            <p>No. Create a project and send the link.</p>
+            <h3>Is UMLet Collab free?</h3>
+            <p>Yes, it is free to use and open source.</p>
+            <h3>Is it the same as UMLet?</h3>
+            <p>It is a fork of UMLet’s web editor with real-time collaboration added. Diagrams use the same <code>.uxf</code> format, so files move between UMLet, UMLetino and UMLet Collab.</p>
+            <h3>Can I host it myself?</h3>
+            <p>Yes. The code is on <a href="https://github.com/ysf-ad/umlet-collab" target="_blank" rel="noopener">GitHub</a> and runs on Cloudflare Workers’ free plan, or locally with Node.</p>
+        </div>
     </details>
 
     <footer>Free to use · up to 5 new projects a month per network · Unopened for 2 months: deleted, then erased after 30 days · Based on <a href="https://github.com/umlet/umlet" target="_blank" rel="noopener">UMLet</a>, open source</footer>

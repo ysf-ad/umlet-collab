@@ -1,3 +1,9 @@
-# private team tool: keep it out of search engines
+# the home page is public; projects are private links and must never be indexed
 User-agent: *
-Disallow: /
+Allow: /$
+Disallow: /app
+Disallow: /project
+Disallow: /collab
+Disallow: /api/
+
+Sitemap: https://umlet.yousifaldakoki.com/sitemap.xml

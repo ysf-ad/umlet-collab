@@ -11,10 +11,12 @@ import { RoomState, toBase64, fromBase64, MAX_VERSIONS } from './room.js';
 import { ProjectState, newProjectId, cleanName, isValidId, roomName } from './project.js';
 import { LIMITS, takeQuota, networkOf } from './limits.js';
 import { captchaAccepted, parseHostnames } from './captcha.js';
+import { retention, sweepDecision, touchVisited, erasedAt } from './expiry.js';
 
 const FLUSH_MS = 1000;            // room state is saved at most once per second
 const TOUCH_INTERVAL_MS = 60000;  // a project's "last edited" time is updated at most once per minute per room
 const MAX_ROOM_NAME = 80;
+const SWEEP_BATCH = 40;           // projects checked per sweep, and diagrams erased per call (a request may make 50 subrequests)
 const VIEWER_TIMEOUT_MS = 120000; // project viewers re-announce every 30 s
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -69,7 +71,9 @@ async function createProject(request, env) {
 		if (!quota.ok) return json({ error: 'project_limit', limit, days: LIMITS.quotaDays, retryAt: quota.retryAt, message: 'You can create up to ' + limit + ' projects per ' + LIMITS.quotaDays + ' days from one network.' }, 429);
 	}
 	const id = newProjectId();
-	return project(env, id).fetch('https://do/init', { method: 'POST', body: JSON.stringify({ id, name: body.name }) });
+	const created = await project(env, id).fetch('https://do/init', { method: 'POST', body: JSON.stringify({ id, name: body.name }) });
+	await directory(env).fetch('https://do/register', { method: 'POST', body: JSON.stringify({ id }) }); // so the expiry sweep finds it
+	return created;
 }
 
 /* details of the projects whose ids the caller already has (what the landing page shows); unknown ids are skipped */
@@ -112,6 +116,11 @@ export default {
 		if (path.startsWith('/api/')) return json({ error: 'not found' }, 404);
 
 		return env.ASSETS.fetch(request);
+	},
+
+	// hourly (see wrangler.jsonc): delete projects nobody opened for 60 days, erase projects deleted 30 days ago
+	async scheduled(event, env, ctx) {
+		ctx.waitUntil(directory(env).fetch('https://do/sweep', { method: 'POST' }));
 	},
 };
 
@@ -241,11 +250,13 @@ export class Project extends DurableObject {
 	async fetch(request) {
 		const url = new URL(request.url);
 		const path = url.pathname;
-		if (path === '/summary') return this.state ? json(this.state.summary()) : json({ error: 'not found' }, 404);
+		if (path === '/summary') return this.state && !this.state.meta.purging ? json({ ...this.state.summary(), erasesAt: erasedAt(this.state.meta, retention(this.env)) }) : json({ error: 'not found' }, 404);
+		if (path === '/sweep') return this.sweep();
 		if (path === '/has') return this.state && this.state.hasDiagram(url.searchParams.get('diagram') || '') ? json({ ok: true }) : json({ error: 'not found' }, 404);
 		if (path === '/touch') {
 			if (this.state && !this.state.meta.deleted) {
 				this.state.meta.updatedAt = Date.now();
+				touchVisited(this.state.meta, Date.now(), retention(this.env));
 				await this.save();
 			}
 			return json({ ok: true });
@@ -254,6 +265,7 @@ export class Project extends DurableObject {
 			if (!this.state) {
 				const { id, name } = await request.json();
 				this.state = ProjectState.create(id, name);
+				this.state.meta.lastVisitedAt = Date.now();
 				await this.save();
 			}
 			return json(this.state.view());
@@ -262,15 +274,19 @@ export class Project extends DurableObject {
 			if (!this.state) return json({ error: 'not found' }, 404);
 			this.state.meta.deleted = true;
 			this.state.meta.deletedAt = Date.now();
+			delete this.state.meta.deletedReason;
 			await this.save();
 			broadcast(this.ctx, JSON.stringify({ t: 'deleted' }));
 			return json({ ok: true });
 		}
 		if (path === '/restore') {
 			if (!this.state) return json({ error: 'not found' }, 404);
+			if (this.state.meta.purging) return json({ error: 'erased', message: 'This project was erased for good and can’t be restored.' }, 410);
 			this.state.meta.deleted = false;
 			delete this.state.meta.deletedAt;
+			delete this.state.meta.deletedReason;
 			this.state.meta.updatedAt = Date.now();
+			this.state.meta.lastVisitedAt = Date.now();
 			await this.save();
 			broadcast(this.ctx, JSON.stringify(this.message()));
 			return json(this.state.view());
@@ -286,7 +302,12 @@ export class Project extends DurableObject {
 
 	message(except) {
 		const exists = this.state && !this.state.meta.deleted;
-		return { t: 'project', project: exists ? this.state.view() : null, deleted: !!(this.state && this.state.meta.deleted), viewers: this.viewers(except) };
+		const meta = this.state && this.state.meta;
+		return {
+			t: 'project', project: exists ? this.state.view() : null, deleted: !!(meta && meta.deleted), viewers: this.viewers(except),
+			deletedAt: meta && meta.deleted ? meta.deletedAt || null : null, erasesAt: meta ? erasedAt(meta, retention(this.env)) : null,
+			deletedReason: meta && meta.deleted ? meta.deletedReason || null : null,
+		};
 	}
 
 	viewers(except) {
@@ -306,6 +327,12 @@ export class Project extends DurableObject {
 			ws.serializeAttachment({ id: a.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16), seen: Date.now() });
 			const after = this.viewers();
 			if (JSON.stringify(after) !== before) broadcast(this.ctx, JSON.stringify({ t: 'viewers', viewers: after })); // heartbeats change nothing
+			if (this.state && !this.state.meta.deleted) {
+				const newPerson = this.state.addVisitor(msg.visitor);
+				const visited = touchVisited(this.state.meta, Date.now(), retention(this.env)); // keeps the project from expiring
+				if (newPerson || visited) await this.save();
+				if (newPerson) broadcast(this.ctx, JSON.stringify(this.message())); // everyone sees the count grow
+			}
 			return;
 		}
 		if (!this.state || this.state.meta.deleted) return;
@@ -329,19 +356,86 @@ export class Project extends DurableObject {
 	async save() {
 		await this.ctx.storage.put('meta', this.state.meta);
 	}
+
+	/* called by the Directory's sweep: delete the project if nobody opened it for long, erase it once it has been deleted long enough.
+	   Returns {gone: true} once nothing of it is left. */
+	async sweep() {
+		if (!this.state) return json({ gone: true });
+		const meta = this.state.meta, now = Date.now();
+		if (!meta.purging) {
+			const action = sweepDecision(meta, now, retention(this.env));
+			if (action === 'start') { // from before projects expired: the clock starts now
+				meta.lastVisitedAt = now;
+				await this.save();
+			} else if (action === 'delete') {
+				meta.deleted = true;
+				meta.deletedAt = now;
+				meta.deletedReason = 'inactive';
+				await this.save();
+				broadcast(this.ctx, JSON.stringify({ t: 'deleted' }));
+			} else if (action === 'purge') {
+				meta.purging = true; // from here on it can't be restored
+				await this.save();
+				for (const ws of this.ctx.getWebSockets()) try { ws.close(1000, 'erased'); } catch { /* closed */ }
+			}
+		}
+		if (!meta.purging) return json({ gone: false });
+		// a few diagrams at a time, so a big project never exceeds the per-request limits; the next sweep continues
+		const batch = meta.diagrams.slice(0, SWEEP_BATCH);
+		await Promise.all(batch.map((d) => this.env.ROOMS.get(this.env.ROOMS.idFromName(roomName(meta.id, d.id))).fetch('https://do/purge', { method: 'POST' })));
+		meta.diagrams = meta.diagrams.slice(batch.length);
+		if (meta.diagrams.length) {
+			await this.save();
+			return json({ gone: false });
+		}
+		await this.ctx.storage.deleteAll();
+		this.state = null;
+		return json({ gone: true });
+	}
 }
 
 /* single instance: how many projects each network created lately (keys are hashes, never the address itself).
    Older versions also kept a list of all projects here ("p:" entries); nothing reads or serves it any more. */
 export class Directory extends DurableObject {
 	async fetch(request) {
-		if (new URL(request.url).pathname !== '/quota') return json({ error: 'not found' }, 404);
+		const path = new URL(request.url).pathname;
+		if (path === '/register') { // a new project, to be swept
+			const { id } = await request.json();
+			if (isValidId(id)) await this.ctx.storage.put('r:' + id, 1);
+			return json({ ok: true });
+		}
+		if (path === '/sweep') return json(await this.expire());
+		if (path !== '/quota') return json({ error: 'not found' }, 404);
 		const { key, limit, windowMs } = await request.json();
 		const now = Date.now();
 		const taken = takeQuota((await this.ctx.storage.get('q:' + key)) || [], now, limit, windowMs);
 		if (taken.ok) await this.ctx.storage.put('q:' + key, taken.stamps);
 		await this.sweep(now, windowMs);
 		return json({ ok: taken.ok, retryAt: taken.retryAt });
+	}
+
+	/* checks the next batch of registered projects (a stored cursor continues where the last sweep stopped).
+	   Projects created before the registry existed are taken from the old "p:" entries once. */
+	async expire() {
+		if (!(await this.ctx.storage.get('backfilled'))) {
+			const old = await this.ctx.storage.list({ prefix: 'p:' });
+			const keys = Array.from(old.keys(), (key) => 'r:' + key.slice(2));
+			for (let i = 0; i < keys.length; i += 128) await this.ctx.storage.put(Object.fromEntries(keys.slice(i, i + 128).map((k) => [k, 1])));
+			await this.ctx.storage.put('backfilled', Date.now());
+		}
+		const after = await this.ctx.storage.get('cursor');
+		const batch = Array.from((await this.ctx.storage.list({ prefix: 'r:', ...(after ? { startAfter: after } : {}), limit: SWEEP_BATCH })).keys());
+		const gone = [];
+		await Promise.all(batch.map(async (key) => {
+			try {
+				const r = await project(this.env, key.slice(2)).fetch('https://do/sweep', { method: 'POST' });
+				if ((await r.json()).gone) gone.push(key);
+			} catch { /* try again next time */ }
+		}));
+		if (gone.length) await this.ctx.storage.delete(gone);
+		if (batch.length < SWEEP_BATCH) await this.ctx.storage.delete('cursor');
+		else await this.ctx.storage.put('cursor', batch[batch.length - 1]);
+		return { checked: batch.length, erased: gone.length };
 	}
 
 	/* once a day: forget networks whose last project is older than the window */

@@ -7,6 +7,7 @@
 import { LIMITS } from './limits.js';
 
 const MAX_NAME = 80;
+const MAX_VISITORS = 200; // how many distinct people are counted per project
 
 export function newId() {
 	return crypto.randomUUID().replace(/-/g, '').slice(0, 10);
@@ -44,7 +45,7 @@ export class ProjectState {
 	view() {
 		const m = this.meta;
 		return {
-			id: m.id, name: m.name, createdAt: m.createdAt, updatedAt: m.updatedAt,
+			id: m.id, name: m.name, createdAt: m.createdAt, updatedAt: m.updatedAt, people: (m.visitors || []).length,
 			diagrams: m.diagrams.filter((d) => !d.deleted).map(({ id, name, createdAt }) => ({ id, name, createdAt })),
 			trash: m.diagrams.filter((d) => d.deleted).map(({ id, name, deletedAt }) => ({ id, name, deletedAt })).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)),
 		};
@@ -52,11 +53,20 @@ export class ProjectState {
 
 	summary() {
 		const v = this.view();
-		return { id: v.id, name: v.name, createdAt: v.createdAt, updatedAt: v.updatedAt, diagrams: v.diagrams.length, deleted: !!this.meta.deleted, deletedAt: this.meta.deletedAt || null };
+		return { id: v.id, name: v.name, createdAt: v.createdAt, updatedAt: v.updatedAt, people: v.people, diagrams: v.diagrams.length, deleted: !!this.meta.deleted, deletedAt: this.meta.deletedAt || null };
 	}
 
 	visible() {
 		return this.meta.diagrams.filter((d) => !d.deleted);
+	}
+
+	/* counts a person who opened the project, by the random id their browser made up (no names, nothing personal); true if new */
+	addVisitor(id) {
+		if (typeof id !== 'string' || !/^[a-z0-9]{8,32}$/i.test(id)) return false;
+		const visitors = this.meta.visitors || (this.meta.visitors = []);
+		if (visitors.length >= MAX_VISITORS || visitors.includes(id)) return false;
+		visitors.push(id);
+		return true;
 	}
 
 	/* does this project have the diagram (live or in the deleted list)? Permanently deleted diagrams are gone. */

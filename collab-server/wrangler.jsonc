@@ -13,6 +13,8 @@
 	// these hostnames for the create_project action. Optional secret QUOTA_SALT: random text mixed into the hashed network
 	// addresses of the quota.
 	"vars": { "MAX_PROJECTS_PER_IP": "5", "TURNSTILE_SITE_KEY": "0x4AAAAAAFep48Ip1HXmdTxV", "TURNSTILE_HOSTNAMES": "umlet.yousifaldakoki.com" },
+	// hourly: delete projects nobody opened for 60 days, erase projects that were deleted 30 days ago (src/expiry.js)
+	"triggers": { "crons": ["23 * * * *"] },
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS"

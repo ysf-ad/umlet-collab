@@ -131,6 +131,34 @@ test('there is no public list of projects; lookup only answers for ids it is giv
 	assert.deepStrictEqual(await lookup('not a list'), []);
 });
 
+test('people who opened a project are counted once each, by random id, up to a cap', () => {
+	const p = ProjectState.create('p1', 'P');
+	assert.strictEqual(p.view().people, 0);
+	assert.ok(p.addVisitor('a1b2c3d4e5f6'));
+	assert.strictEqual(p.addVisitor('a1b2c3d4e5f6'), false, 'the same person again');
+	for (const bad of ['short', '', null, 5, 'has spaces in it!', 'x'.repeat(40)]) assert.strictEqual(p.addVisitor(bad), false, String(bad));
+	assert.ok(p.addVisitor('f6e5d4c3b2a1'));
+	assert.strictEqual(p.view().people, 2);
+	assert.strictEqual(p.summary().people, 2);
+	for (let i = 0; i < 300; i++) p.addVisitor('visitor' + String(i).padStart(6, '0'));
+	assert.strictEqual(p.view().people, 200);
+});
+
+test('the people count grows when someone new joins, and only then', async () => {
+	const created = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: '{}' })).json();
+	const a = await connect(created.id), b = await connect(created.id);
+	const view = (c) => c.inbox.filter((m) => m.t === 'project').pop().project;
+	a.send({ t: 'viewing', diagram: created.diagrams[0].id, name: 'Ann', color: '#f00', visitor: 'annannann1234' });
+	await sleep(80);
+	assert.strictEqual(view(b).people, 1, 'others see it too');
+	a.send({ t: 'viewing', diagram: created.diagrams[0].id, name: 'Ann', color: '#f00', visitor: 'annannann1234' }); // heartbeat
+	b.send({ t: 'viewing', diagram: created.diagrams[0].id, name: 'Bob', color: '#00f', visitor: 'bobbobbob5678' });
+	await sleep(80);
+	assert.strictEqual(view(a).people, 2);
+	assert.strictEqual((await lookup([created.id]))[0].people, 2);
+	[a, b].forEach((c) => c.ws.close());
+});
+
 test('a project has at most 40 diagrams, restoring respects that too, and errors say why', () => {
 	const p = ProjectState.create('p1', 'P');
 	for (let i = 1; i < LIMITS.maxDiagramsPerProject; i++) assert.ok(p.handle({ t: 'add' }).changed);

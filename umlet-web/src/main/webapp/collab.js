@@ -31,12 +31,20 @@
 	function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* not remembered */ } }
 	// distinct colours that keep white labels readable; the project bar makes sure people in a project don't share one
 	var COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa4c2', '#f032e6', '#469990', '#9a6324', '#800000', '#808000', '#000075'];
+	// random and anonymous: only lets a project count how many different browsers joined it
+	function newVisitorId() {
+		var bytes = new Uint8Array(8);
+		(window.crypto || window.msCrypto).getRandomValues(bytes);
+		return Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+	}
 	var me = {
 		id: null,
+		visitor: stored('umletcollab.visitor') || newVisitorId(),
 		color: stored('umletcollab.color') || COLORS[Math.floor(Math.random() * COLORS.length)],
 		name: stored('umletcollab.name') || 'User ' + Math.floor(Math.random() * 90 + 10)
 	};
 	store('umletcollab.color', me.color);
+	store('umletcollab.visitor', me.visitor);
 
 	var ws = null;
 	var ready = false;        // GWT exported its functions

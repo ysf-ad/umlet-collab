@@ -128,7 +128,9 @@ projectWss.on('connection', (ws, req) => {
 			ws.viewing = { id: ws.id, diagram: String(msg.diagram || '').slice(0, 32), name: cleanName(msg.name, 'Someone'), color: String(msg.color || '#888').slice(0, 16) };
 			ws.seen = Date.now();
 			const after = viewers();
-			return JSON.stringify(after) !== before ? broadcast(JSON.stringify({ t: 'viewers', viewers: after })) : undefined;
+			if (JSON.stringify(after) !== before) broadcast(JSON.stringify({ t: 'viewers', viewers: after }));
+			if (!p.state.meta.deleted && p.state.addVisitor(msg.visitor)) broadcast(JSON.stringify(message()));
+			return;
 		}
 		const { changed, reply, purged } = p.state.handle(msg);
 		if (reply) ws.send(JSON.stringify(reply));

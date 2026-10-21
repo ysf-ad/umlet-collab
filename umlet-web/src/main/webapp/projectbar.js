@@ -87,7 +87,13 @@
 	var meDot = el('span', { className: 'pb-dot', slot: 'prefix' });
 	var meLabel = el('span');
 	var meButton = tooltip('Change your display name', el('sl-button', { variant: 'text', size: 'small', className: 'pb-me' }, [meDot, meLabel]));
-	var shareButton = el('sl-button', { size: 'small', className: 'pb-share' }, [icon('link-45deg', 'prefix'), document.createTextNode('Copy link')]);
+	var shareButton = el('sl-button', { variant: 'primary', size: 'small', className: 'pb-share' }, [icon('share', 'prefix'), document.createTextNode('Share')]);
+	var shareTip = tooltip('Copy the link. Anyone who has it can edit this project, and nobody else can find it.', shareButton);
+	// how many different people have opened the project so far (shown once it is more than you)
+	var joinedCount = el('span', { className: 'pb-joined-n' });
+	var joinedBadge = el('span', { className: 'pb-joined' }, [icon('people'), joinedCount]);
+	var joinedTip = tooltip('', joinedBadge);
+	joinedTip.style.display = 'none';
 
 	var bar = el('div', { id: 'projectbar' }, [
 		homeButton,
@@ -103,7 +109,8 @@
 		trashDropdown,
 		themeTooltip,
 		meButton,
-		shareButton
+		joinedTip,
+		shareTip
 	]);
 	var toast = el('div', { id: 'pb-toast', role: 'status' });
 	// covers the editor while collab.js loads the diagram (html.collab-loading), so a diagram still loading doesn't look empty
@@ -170,6 +177,8 @@
 	// ---- connection -----------------------------------------------------------------
 	var reconnectDelay = 1500;
 	var refusedForGood = false; // the server said this project link is not valid
+	var erasure = null; // for a deleted project: {at: when it is erased for good, inactive: deleted because nobody opened it}
+
 	function connect() {
 		var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		ws = new WebSocket(proto + '//' + location.host + '/project?id=' + encodeURIComponent(projectId));
@@ -180,6 +189,7 @@
 				reconnectDelay = 1500;
 				showBlocked(null);
 				viewers = msg.viewers || [];
+				erasure = msg.deleted ? { at: msg.erasesAt || null, inactive: msg.deletedReason === 'inactive' } : null;
 				onProject(msg.project, msg.deleted);
 				avoidSameColor();
 				if (msg.you) { // first message of a (re)connection: tell the others where we are
@@ -219,6 +229,8 @@
 		var previous = project;
 		project = p;
 		umletProjects.remember(p.id, p.name); // the project list page shows the projects this browser has opened
+		renderJoined(p);
+		maybeShareHint(p);
 		projectNameEl.textContent = p.name;
 		document.body.classList.remove('pb-missing'); // the project may have been restored
 		var missing = document.getElementById('pb-missing');
@@ -268,7 +280,9 @@
 		document.body.classList.add('pb-missing');
 		var box = document.getElementById('pb-missing') || document.body.appendChild(el('div', { id: 'pb-missing' }));
 		box.innerHTML = '';
-		box.appendChild(el('p', { text: message || (restorable ? 'This project was deleted. Its diagrams are still there.' : 'This project doesn’t exist.') }));
+		var deletedText = 'This project was deleted' + (erasure && erasure.inactive ? ' because nobody opened it for 2 months' : '') + '. '
+			+ (erasure && erasure.at ? 'You can restore it until ' + new Date(erasure.at).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) + ', then it is erased for good.' : 'Deleted projects are erased for good after 30 days.');
+		box.appendChild(el('p', { text: message || (restorable ? deletedText : 'This project doesn’t exist.') }));
 		if (restorable) {
 			var restore = el('sl-button', { variant: 'primary' }, [document.createTextNode('Restore project')]);
 			restore.addEventListener('click', function () {
@@ -301,7 +315,7 @@
 	}
 
 	function announce() {
-		send({ t: 'viewing', diagram: current, name: umletCollab.me.name, color: umletCollab.me.color });
+		send({ t: 'viewing', diagram: current, name: umletCollab.me.name, color: umletCollab.me.color, visitor: umletCollab.me.visitor });
 	}
 	// heartbeat so the server can drop viewers whose connection died without closing (see project viewers())
 	setInterval(function () { if (current && ws && ws.readyState === 1) announce(); }, 30000);
@@ -628,8 +642,25 @@
 			announce();
 		}
 	});
+	function renderJoined(p) {
+		var n = p.people || 0;
+		joinedTip.style.display = n < 2 ? 'none' : '';
+		joinedCount.textContent = String(n);
+		joinedTip.content = n + ' people have opened this project so far. Anyone with its link can join.';
+	}
+
+	// a project you just made is private: say so once, and point at the way to invite people
+	function maybeShareHint(p) {
+		if (!p.createdAt || Date.now() - p.createdAt > 3 * 60 * 1000 || (p.people || 0) > 1) return;
+		var key = 'umletcollab.hint.' + p.id;
+		try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch (e) { return; }
+		showToast('This project is private: only you can see it. Click Share to copy its link and invite others.');
+		shareButton.classList.add('pb-pulse');
+		setTimeout(function () { shareButton.classList.remove('pb-pulse'); }, 7000);
+	}
+
 	shareButton.addEventListener('click', function () {
-		var done = function () { showToast('Link copied'); };
+		var done = function () { showToast('Link copied. Anyone who has it can open and edit this project.'); };
 		if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done, function () { prompt('Copy this link:', location.href); });
 		else prompt('Copy this link:', location.href);
 	});
@@ -681,7 +712,10 @@
 		'html.collab-loading #pb-loading{display:flex}',
 		'#pb-loading sl-spinner{font-size:1.5rem}',
 		'#pb-missing,#pb-blocked{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sl-spacing-medium);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-700);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:999}',
-		'body.pb-missing #projectbar .pb-add,body.pb-missing #projectbar .pb-share{display:none}'
+		'#projectbar .pb-joined{display:inline-flex;align-items:center;gap:4px;padding:0 var(--sl-spacing-x-small);color:var(--sl-color-neutral-600);font-size:var(--sl-font-size-small);cursor:default}',
+		'#projectbar .pb-share.pb-pulse::part(base){animation:pb-pulse 1.4s ease-out 5}',
+		'@keyframes pb-pulse{0%{box-shadow:0 0 0 0 var(--sl-color-primary-400)}70%{box-shadow:0 0 0 10px transparent}100%{box-shadow:0 0 0 0 transparent}}',
+		'body.pb-missing #projectbar .pb-add,body.pb-missing #projectbar .pb-share,body.pb-missing #projectbar .pb-joined{display:none}'
 	].join('\n');
 	document.head.appendChild(style);
 

@@ -26,6 +26,15 @@
         h1 { font-size: var(--sl-font-size-x-large); font-weight: var(--sl-font-weight-semibold); margin: 0; }
         header p { margin: 0; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
         header .spacer { flex: 1; }
+        .how { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sl-spacing-medium); margin: 0 0 var(--sl-spacing-x-large); padding: 0; list-style: none; }
+        .how li { display: block; padding: var(--sl-spacing-medium); border: 1px solid var(--sl-color-neutral-200); border-radius: var(--sl-border-radius-large); background: var(--sl-color-neutral-0); }
+        .how sl-icon { font-size: var(--sl-font-size-x-large); color: var(--sl-color-primary-600); }
+        .how strong { display: block; margin: var(--sl-spacing-2x-small) 0; font-weight: var(--sl-font-weight-semibold); }
+        .how span { color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); line-height: 1.4; display: block; }
+        @media (max-width: 640px) { .how { grid-template-columns: 1fr; } }
+        .note { margin: var(--sl-spacing-small) 0; color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
+        footer { margin-top: var(--sl-spacing-2x-large); color: var(--sl-color-neutral-500); font-size: var(--sl-font-size-small); text-align: center; }
+        footer a { color: inherit; }
         form { display: flex; gap: var(--sl-spacing-x-small); margin-bottom: var(--sl-spacing-x-large); }
         form sl-input { flex: 1; min-width: 0; }
         .toolbar { display: flex; justify-content: space-between; margin-bottom: var(--sl-spacing-x-small); color: var(--sl-color-neutral-600); font-size: var(--sl-font-size-small); }
@@ -49,25 +58,34 @@
     <header>
         <img src="umlet_logo64.png" alt="">
         <div>
-            <h1>UMLet projects</h1>
-            <p>Each project holds several UML diagrams that you edit together. Only people with a project’s link can open it. The projects you create or open on this device are listed below.</p>
+            <h1>Draw UML diagrams together, live</h1>
+            <p>No sign-up. Everyone with your project’s link edits the same diagrams at the same time.</p>
         </div>
         <div class="spacer"></div>
         <sl-tooltip id="theme-tip" content="Dark mode"><sl-icon-button id="theme" name="moon" label="Dark mode"></sl-icon-button></sl-tooltip>
     </header>
+
+    <ul class="how">
+        <li><sl-icon name="plus-lg"></sl-icon><strong>Create a project</strong><span>It holds up to 40 diagrams, each in its own tab. Everything saves automatically.</span></li>
+        <li><sl-icon name="share"></sl-icon><strong>Share the link</strong><span>Send it to your team. Whoever has it can edit with you, live.</span></li>
+        <li><sl-icon name="lock"></sl-icon><strong>Private by default</strong><span>Projects aren’t listed anywhere. Only people you send the link to can find yours. Projects nobody opens for 2 months are deleted.</span></li>
+    </ul>
 
     <form id="create">
         <sl-input id="name" placeholder="New project name, e.g. Payment service" maxlength="80" aria-label="Project name"></sl-input>
         <sl-button variant="primary" type="submit"><sl-icon slot="prefix" name="plus-lg"></sl-icon>Create project</sl-button>
     </form>
 
-    <div class="toolbar"><span id="count"></span><span>Sorted by last edit</span></div>
+    <div class="toolbar"><span id="count"></span><span>Your projects on this device, latest edit first</span></div>
     <ul id="projects"><li class="empty">Loading…</li></ul>
 
     <details id="trash" hidden>
         <summary id="trash-summary">Recently deleted</summary>
+        <p class="note">Deleted projects can be restored for 30 days. After that they are erased for good.</p>
         <ul id="deleted"></ul>
     </details>
+
+    <footer>Free to use · up to 5 new projects a month per network · Unopened for 2 months: deleted, then erased after 30 days · Based on <a href="https://github.com/umlet/umlet" target="_blank" rel="noopener">UMLet</a>, open source</footer>
 </main>
 <script>
     var list = document.getElementById('projects');
@@ -81,6 +99,13 @@
         while (value >= units[i][0]) { value /= units[i][0]; i++; }
         var n = Math.floor(value);
         return n + ' ' + units[i][1] + (n === 1 ? '' : 's') + ' ago';
+    }
+
+    // "in 12 days", for when a deleted project is erased
+    function until(time) {
+        var days = Math.ceil((time - Date.now()) / 86400000);
+        if (days <= 1) return 'within a day';
+        return 'in ' + days + ' days';
     }
 
     function el(tag, className, text) {
@@ -100,7 +125,8 @@
         var text = el('div');
         text.style.minWidth = '0';
         text.appendChild(el('div', 'name', p.name));
-        text.appendChild(el('div', 'meta', p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + ' · ' + (deleted ? 'deleted ' + ago(p.deletedAt || p.updatedAt) : 'edited ' + ago(p.updatedAt))));
+        var people = p.people > 1 ? ' · ' + p.people + ' people' : '';
+        text.appendChild(el('div', 'meta', p.diagrams + (p.diagrams === 1 ? ' diagram' : ' diagrams') + people + ' · ' + (deleted ? 'deleted ' + ago(p.deletedAt || p.updatedAt) + (p.erasesAt ? ' · erased ' + until(p.erasesAt) : '') : 'edited ' + ago(p.updatedAt))));
         link.appendChild(folder);
         link.appendChild(text);
         li.appendChild(link);
@@ -136,7 +162,7 @@
         list.innerHTML = '';
         count.textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
         if (!projects.length) {
-            list.appendChild(el('li', 'empty', 'No projects here yet. Create one above, or open a link that someone shared with you.'));
+            list.appendChild(el('li', 'empty', 'No projects on this device yet. Create one above, or open a link someone sent you.'));
             return;
         }
         projects.forEach(function (p) { list.appendChild(row(p, false)); });

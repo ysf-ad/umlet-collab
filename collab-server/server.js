@@ -8,7 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { RoomState, MAX_VERSIONS } from './src/room.js';
-import { ProjectState, DirectoryState, newId, cleanName, isValidId, roomName as roomKey } from './src/project.js';
+import { ProjectState, newProjectId, cleanName, isValidId, roomName as roomKey } from './src/project.js';
+import { LIMITS } from './src/limits.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
@@ -21,25 +22,37 @@ const MIME = {
 };
 
 const projects = new Map(); // id -> { state: ProjectState, clients: Set<ws> }
-const directory = new DirectoryState();
 
 function sendJson(res, data, status = 200) {
 	res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
 	res.end(JSON.stringify(data));
 }
 
+function readJson(req, done) {
+	let body = '';
+	req.on('data', (c) => { if (body.length < 100000) body += c; });
+	req.on('end', () => {
+		let data = {};
+		try { data = JSON.parse(body || '{}'); } catch { /* defaults */ }
+		done(data);
+	});
+}
+
+// there is no listing of projects: a project is only reachable by whoever knows its id (see worker.js)
 function handleApi(req, res, urlPath) {
-	if (urlPath === '/api/projects' && req.method === 'GET') return sendJson(res, new URL(req.url, 'http://x').searchParams.has('deleted') ? directory.listDeleted() : directory.list()), true;
+	if (urlPath === '/api/config' && req.method === 'GET') return sendJson(res, { turnstileSiteKey: null }), true; // no captcha or quota on the Node relay
 	if (urlPath === '/api/projects' && req.method === 'POST') {
-		let body = '';
-		req.on('data', (c) => (body += c));
-		req.on('end', () => {
-			let name;
-			try { name = JSON.parse(body || '{}').name; } catch { /* default name */ }
-			const state = ProjectState.create(newId(), name);
+		readJson(req, (body) => {
+			const state = ProjectState.create(newProjectId(), body.name);
 			projects.set(state.meta.id, { state, clients: new Set() });
-			directory.upsert(state.summary());
 			sendJson(res, state.view());
+		});
+		return true;
+	}
+	if (urlPath === '/api/projects/lookup' && req.method === 'POST') {
+		readJson(req, (body) => {
+			const ids = (Array.isArray(body.ids) ? body.ids : []).filter(isValidId).slice(0, LIMITS.maxLookupIds);
+			sendJson(res, ids.map((id) => projects.get(id)).filter(Boolean).map((p) => p.state.summary()));
 		});
 		return true;
 	}
@@ -49,7 +62,6 @@ function handleApi(req, res, urlPath) {
 		if (!p) return sendJson(res, { error: 'not found' }, 404), true;
 		p.state.meta.deleted = true;
 		p.state.meta.deletedAt = Date.now();
-		directory.upsert(p.state.summary());
 		for (const c of p.clients) c.send(JSON.stringify({ t: 'deleted' }));
 		return sendJson(res, { ok: true }), true;
 	}
@@ -60,9 +72,9 @@ function handleApi(req, res, urlPath) {
 		p.state.meta.deleted = false;
 		delete p.state.meta.deletedAt;
 		p.state.meta.updatedAt = Date.now();
-		directory.upsert(p.state.summary());
 		return sendJson(res, p.state.view()), true;
 	}
+	if (urlPath.startsWith('/api/')) return sendJson(res, { error: 'not found' }, 404), true;
 	return false;
 }
 
@@ -97,12 +109,17 @@ projectWss.on('connection', (ws, req) => {
 	const p = isValidId(id) && projects.get(id);
 	const VIEWER_TIMEOUT_MS = 120000; // clients re-announce every 30 s; silent ones (dead connections) drop off
 	const viewers = (except) => (p ? Array.from(p.clients).filter((c) => c !== except && c.viewing && Date.now() - c.seen < VIEWER_TIMEOUT_MS).map((c) => c.viewing) : []);
-	const message = () => ({ t: 'project', project: p && !p.state.meta.deleted ? p.state.view() : null, viewers: viewers() });
+	const message = () => ({ t: 'project', project: p && !p.state.meta.deleted ? p.state.view() : null, deleted: !!(p && p.state.meta.deleted), viewers: viewers() });
 	const broadcast = (data, except) => { if (p) for (const c of p.clients) if (c !== except && c.readyState === 1) c.send(data); };
 	ws.id = Math.random().toString(36).slice(2, 10);
+	if (p && p.clients.size >= LIMITS.maxViewersPerProject) {
+		ws.send(JSON.stringify({ t: 'full', message: 'This project already has ' + LIMITS.maxViewersPerProject + ' people connected. Trying again shortly.' }));
+		return ws.close(1013, 'full');
+	}
 	if (p) p.clients.add(ws);
 	ws.send(JSON.stringify({ ...message(), you: ws.id }));
 	ws.on('message', (raw) => {
+		if (raw.length > LIMITS.maxMessageBytes) return;
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (!p || p.state.meta.deleted) return;
@@ -120,10 +137,7 @@ projectWss.on('connection', (ws, req) => {
 			if (room) for (const c of room.clients) c.close(1000, 'deleted');
 			rooms.delete(roomKey(id, purged));
 		}
-		if (changed) {
-			directory.upsert(p.state.summary());
-			broadcast(JSON.stringify(message()));
-		}
+		if (changed) broadcast(JSON.stringify(message()));
 	});
 	ws.on('close', () => {
 		if (!p) return;
@@ -132,15 +146,30 @@ projectWss.on('connection', (ws, req) => {
 	});
 });
 
+function reject(ws, message) {
+	ws.send(JSON.stringify({ t: 'rejected', message }));
+	ws.close(1008, 'rejected');
+}
+
 wss.on('connection', (ws, req) => {
-	const roomName = new URL(req.url, 'http://x').searchParams.get('room') || 'default';
+	const roomName = (new URL(req.url, 'http://x').searchParams.get('room') || 'default').slice(0, 80);
+	if (roomName.includes('/')) { // a project's diagram: the project must exist and have it
+		const [projectId, diagramId, ...rest] = roomName.split('/');
+		const p = !rest.length && isValidId(projectId) && isValidId(diagramId) && projects.get(projectId);
+		if (!p || !p.state.hasDiagram(diagramId)) return reject(ws, 'This diagram doesn’t exist (anymore).');
+	}
 	if (!rooms.has(roomName)) rooms.set(roomName, { clients: new Set(), state: new RoomState(), versions: [] }); // versions: newest first
 	const room = rooms.get(roomName);
+	if (room.clients.size >= LIMITS.maxPeersPerDiagram) {
+		ws.send(JSON.stringify({ t: 'full', message: 'This diagram already has ' + LIMITS.maxPeersPerDiagram + ' people editing. Trying again shortly.' }));
+		return ws.close(1013, 'full');
+	}
 	ws.id = Math.random().toString(36).slice(2, 10);
 	room.clients.add(ws);
 	ws.send(JSON.stringify({ t: 'hello', id: ws.id, ...room.state.hello() }));
 
 	ws.on('message', (raw) => {
+		if (raw.length > LIMITS.maxMessageBytes) return ws.send(JSON.stringify({ t: 'error', message: 'That change was too large to send (over 1 MB).' }));
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (msg.t === 'versions') return ws.send(JSON.stringify({ t: 'versions', versions: room.versions.map(({ at, reason, count }) => ({ at, reason, count })) }));
@@ -148,12 +177,17 @@ wss.on('connection', (ws, req) => {
 			const v = room.versions.find((x) => x.at === msg.at);
 			return ws.send(JSON.stringify({ t: 'version', at: msg.at, uxf: v ? v.uxf : null }));
 		}
+		if (msg.t === 'ops') {
+			const limited = room.state.enforceLimits(msg);
+			if (limited.rejected.length) ws.send(JSON.stringify({ t: 'limit', reason: limited.reason, max: LIMITS.maxElementsPerDiagram, rejected: limited.rejected }));
+			msg = limited.msg;
+		}
 		const version = msg.t === 'checkpoint' ? room.state.versionNow('before a restore') : room.state.versionBefore(msg);
 		if (version) room.versions = [version].concat(room.versions).slice(0, MAX_VERSIONS);
 		const out = room.state.handle(msg);
 		if (!out) return;
 		const projectId = roomName.includes('/') ? roomName.split('/')[0] : null;
-		if (projectId && msg.t !== 'presence') directory.touch(projectId);
+		if (projectId && msg.t !== 'presence' && projects.has(projectId)) projects.get(projectId).state.meta.updatedAt = Date.now();
 		const data = JSON.stringify({ ...out, from: ws.id });
 		for (const c of room.clients) if (c !== ws && c.readyState === 1) c.send(data);
 	});

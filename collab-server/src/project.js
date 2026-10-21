@@ -4,10 +4,17 @@
 // Project changes are rare and small, so the server is authoritative: clients send operations, the server
 // applies them in order and broadcasts the whole project to everyone in it.
 
+import { LIMITS } from './limits.js';
+
 const MAX_NAME = 80;
 
 export function newId() {
 	return crypto.randomUUID().replace(/-/g, '').slice(0, 10);
+}
+
+/* a project id is the only secret protecting its diagrams, so new ones are 96 bits (older projects keep their 40 bit ids) */
+export function newProjectId() {
+	return crypto.randomUUID().replace(/-/g, '').slice(0, 24);
 }
 
 export function cleanName(name, fallback) {
@@ -52,6 +59,11 @@ export class ProjectState {
 		return this.meta.diagrams.filter((d) => !d.deleted);
 	}
 
+	/* does this project have the diagram (live or in the deleted list)? Permanently deleted diagrams are gone. */
+	hasDiagram(id) {
+		return this.meta.diagrams.some((d) => d.id === id);
+	}
+
 	/**
 	 * Applies a client operation. Returns {changed, reply, purged} where reply is sent back to the sender only
 	 * (e.g. the id of a new diagram so it can switch to it), or an error, and purged is the id of a diagram whose
@@ -62,6 +74,8 @@ export class ProjectState {
 		const find = (id) => diagrams.find((d) => d.id === id && !d.deleted);
 		switch (msg.t) {
 			case 'add': {
+				if (this.visible().length >= LIMITS.maxDiagramsPerProject) return { changed: false, reply: { t: 'error', code: 'limit', message: 'A project can have at most ' + LIMITS.maxDiagramsPerProject + ' diagrams. Delete one to add another.' } };
+				if (diagrams.length - this.visible().length >= LIMITS.maxDeletedPerProject) return { changed: false, reply: { t: 'error', code: 'limit', message: 'This project holds ' + LIMITS.maxDeletedPerProject + ' deleted diagrams. Delete some of them permanently (Deleted menu) to add new ones.' } };
 				const n = this.visible().length + 1;
 				const d = { id: newId(), name: cleanName(msg.name, 'Diagram ' + n), createdAt: Date.now(), deleted: false };
 				diagrams.push(d);
@@ -85,6 +99,7 @@ export class ProjectState {
 				// restored diagrams come back at the end of the tab list
 				const d = diagrams.find((x) => x.id === msg.id && x.deleted);
 				if (!d) return { changed: false };
+				if (this.visible().length >= LIMITS.maxDiagramsPerProject) return { changed: false, reply: { t: 'error', code: 'limit', message: 'The project already has ' + LIMITS.maxDiagramsPerProject + ' diagrams. Delete one before restoring another.' } };
 				const others = this.visible();
 				d.deleted = false;
 				delete d.deletedAt;
@@ -118,33 +133,5 @@ export class ProjectState {
 	touched(reply) {
 		this.meta.updatedAt = Date.now();
 		return { changed: true, reply };
-	}
-}
-
-/* index of all projects for the landing page */
-export class DirectoryState {
-	constructor(entries = []) {
-		this.projects = new Map(entries.map((p) => [p.id, p]));
-	}
-
-	upsert(summary) {
-		const old = this.projects.get(summary.id);
-		this.projects.set(summary.id, { ...old, ...summary, updatedAt: Math.max(summary.updatedAt || 0, old?.updatedAt || 0) });
-		return this.projects.get(summary.id);
-	}
-
-	touch(id, time = Date.now()) {
-		const p = this.projects.get(id);
-		if (!p) return null;
-		p.updatedAt = Math.max(p.updatedAt || 0, time);
-		return p;
-	}
-
-	list() {
-		return Array.from(this.projects.values()).filter((p) => !p.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
-	}
-
-	listDeleted() {
-		return Array.from(this.projects.values()).filter((p) => p.deleted).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
 	}
 }

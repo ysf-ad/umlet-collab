@@ -1,22 +1,82 @@
 // Cloudflare Worker for collaborative UMLetino.
 // - static files (landing page, app) are served by Workers Static Assets (dist/, see wrangler.jsonc)
-// - GET/POST /api/projects, DELETE /api/projects/<id>   project directory (landing page)
-// - GET /api/projects?deleted=1, POST /api/projects/<id>/restore   recently deleted projects
+// - POST /api/projects (create: captcha and per-network quota), POST /api/projects/lookup (details of the projects a
+//   browser already knows the ids of), DELETE /api/projects/<id>, POST /api/projects/<id>/restore, GET /api/config
 // - /project?id=<projectId>   websocket to the project's Durable Object (diagram list, who views what)
 // - /collab?room=<name>       websocket to one Durable Object per diagram room (element sync, version history, see room.js)
-// Everything is public: whoever has a link can edit (internal tool, no accounts).
+// There are no accounts: whoever has a project's link can edit it, so the project id is the secret. That is why there is
+// no list of projects anywhere, rooms only exist for diagrams that a project has, and limits.js bounds what one visitor can create.
 import { DurableObject } from 'cloudflare:workers';
 import { RoomState, toBase64, fromBase64, MAX_VERSIONS } from './room.js';
-import { ProjectState, DirectoryState, newId, cleanName, isValidId, roomName } from './project.js';
+import { ProjectState, newProjectId, cleanName, isValidId, roomName } from './project.js';
+import { LIMITS, takeQuota, networkOf } from './limits.js';
 
 const FLUSH_MS = 1000;            // room state is saved at most once per second
-const TOUCH_INTERVAL_MS = 60000;  // "last edited" in the directory is updated at most once per minute per room
+const TOUCH_INTERVAL_MS = 60000;  // a project's "last edited" time is updated at most once per minute per room
 const MAX_ROOM_NAME = 80;
 const VIEWER_TIMEOUT_MS = 120000; // project viewers re-announce every 30 s
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const directory = (env) => env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
 const project = (env, id) => env.PROJECTS.get(env.PROJECTS.idFromName(id));
+
+/* a websocket that delivers one message and closes: how a refusal reaches the page (a plain HTTP error would look like a lost connection) */
+function refuseSocket(message, type = 'rejected', code = 1008) {
+	const [client, server] = Object.values(new WebSocketPair());
+	server.accept();
+	server.send(JSON.stringify({ t: type, message }));
+	server.close(code, type);
+	return new Response(null, { status: 101, webSocket: client });
+}
+
+async function hashNetwork(network, salt) {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('umlet-quota:' + (salt || '') + ':' + network));
+	return Array.from(new Uint8Array(digest).slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* true: passed, false: failed, null: could not be checked */
+async function checkCaptcha(secret, token, ip) {
+	if (typeof token !== 'string' || !token) return false;
+	try {
+		const form = new FormData();
+		form.append('secret', secret);
+		form.append('response', token);
+		if (ip) form.append('remoteip', ip);
+		const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form });
+		return !!(await r.json()).success;
+	} catch {
+		return null;
+	}
+}
+
+async function createProject(request, env) {
+	const body = await request.json().catch(() => ({}));
+	const ip = request.headers.get('CF-Connecting-IP'); // always set by Cloudflare; absent in local development, where nothing is limited
+	if (env.TURNSTILE_SECRET) { // the captcha is switched on by setting its secret
+		const passed = await checkCaptcha(env.TURNSTILE_SECRET, body.token, ip);
+		if (passed === null) return json({ error: 'captcha_unavailable', message: 'Couldn’t check the captcha right now. Try again in a moment.' }, 503);
+		if (!passed) return json({ error: 'captcha', message: 'The captcha check failed. Reload the page and try again.' }, 400);
+	}
+	if (ip) {
+		const limit = Number(env.MAX_PROJECTS_PER_IP) || LIMITS.maxProjectsPerIp;
+		const asked = await directory(env).fetch('https://do/quota', {
+			method: 'POST',
+			body: JSON.stringify({ key: await hashNetwork(networkOf(ip), env.QUOTA_SALT), limit, windowMs: LIMITS.quotaDays * 24 * 3600 * 1000 }),
+		});
+		const quota = await asked.json();
+		if (!quota.ok) return json({ error: 'project_limit', limit, days: LIMITS.quotaDays, retryAt: quota.retryAt, message: 'You can create up to ' + limit + ' projects per ' + LIMITS.quotaDays + ' days from one network.' }, 429);
+	}
+	const id = newProjectId();
+	return project(env, id).fetch('https://do/init', { method: 'POST', body: JSON.stringify({ id, name: body.name }) });
+}
+
+/* details of the projects whose ids the caller already has (what the landing page shows); unknown ids are skipped */
+async function lookupProjects(request, env) {
+	const body = await request.json().catch(() => ({}));
+	const ids = (Array.isArray(body.ids) ? body.ids : []).filter(isValidId).slice(0, LIMITS.maxLookupIds);
+	const found = await Promise.all(ids.map((id) => project(env, id).fetch('https://do/summary').then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+	return json(found.filter(Boolean));
+}
 
 export default {
 	async fetch(request, env) {
@@ -25,25 +85,29 @@ export default {
 
 		if (path === '/collab' || path === '/project') {
 			if (request.headers.get('Upgrade') !== 'websocket') return new Response('expected websocket', { status: 426 });
-			if (path === '/collab') {
-				const room = (url.searchParams.get('room') || 'default').slice(0, MAX_ROOM_NAME);
-				return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
+			if (path === '/project') {
+				const id = url.searchParams.get('id');
+				if (!isValidId(id)) return refuseSocket('This project link is not valid.');
+				return project(env, id).fetch(new Request('https://do/ws', request));
 			}
-			const id = url.searchParams.get('id');
-			if (!isValidId(id)) return new Response('bad project id', { status: 400 });
-			return project(env, id).fetch(new Request('https://do/ws', request));
+			const room = (url.searchParams.get('room') || 'default').slice(0, MAX_ROOM_NAME);
+			if (room.includes('/')) { // a project's diagram: the project must exist and have it (permanently deleted ones are gone)
+				const [projectId, diagramId, ...rest] = room.split('/');
+				if (rest.length || !isValidId(projectId) || !isValidId(diagramId)) return refuseSocket('This diagram link is not valid.');
+				const has = await project(env, projectId).fetch('https://do/has?diagram=' + diagramId);
+				if (!has.ok) return refuseSocket('This diagram doesn’t exist (anymore).');
+			}
+			return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
 		}
 
-		if (path === '/api/projects' && request.method === 'GET') return directory(env).fetch(url.searchParams.has('deleted') ? 'https://do/deleted' : 'https://do/list');
-		if (path === '/api/projects' && request.method === 'POST') {
-			const body = await request.json().catch(() => ({}));
-			const id = newId();
-			return project(env, id).fetch('https://do/init', { method: 'POST', body: JSON.stringify({ id, name: body.name }) });
-		}
+		if (path === '/api/config' && request.method === 'GET') return json({ turnstileSiteKey: env.TURNSTILE_SECRET && env.TURNSTILE_SITE_KEY ? env.TURNSTILE_SITE_KEY : null });
+		if (path === '/api/projects' && request.method === 'POST') return createProject(request, env);
+		if (path === '/api/projects/lookup' && request.method === 'POST') return lookupProjects(request, env);
 		const m = path.match(/^\/api\/projects\/([a-z0-9]+)$/i);
 		if (m && request.method === 'DELETE') return project(env, m[1]).fetch('https://do/delete', { method: 'POST' });
 		const r = path.match(/^\/api\/projects\/([a-z0-9]+)\/restore$/i);
 		if (r && request.method === 'POST') return project(env, r[1]).fetch('https://do/restore', { method: 'POST' });
+		if (path.startsWith('/api/')) return json({ error: 'not found' }, 404);
 
 		return env.ASSETS.fetch(request);
 	},
@@ -76,9 +140,13 @@ export class Room extends DurableObject {
 			return json({ ok: true });
 		}
 		if (!this.name) {
-			this.name = new URL(request.url).searchParams.get('room') || '';
+			const requested = new URL(request.url).searchParams.get('room') || '';
+			// a project's diagram was checked by the Worker. An older standalone room is only served if it already holds a diagram.
+			if (!requested.includes('/') && !this.state.elements.size && !this.state.y) return refuseSocket('This diagram doesn’t exist. Create a project from the home page.');
+			this.name = requested;
 			await this.ctx.storage.put('name', this.name);
 		}
+		if (this.ctx.getWebSockets().length >= LIMITS.maxPeersPerDiagram) return refuseSocket('This diagram already has ' + LIMITS.maxPeersPerDiagram + ' people editing. Trying again shortly.', 'full', 1013);
 		const [client, server] = Object.values(new WebSocketPair());
 		const id = crypto.randomUUID().slice(0, 8);
 		this.ctx.acceptWebSocket(server);
@@ -88,12 +156,18 @@ export class Room extends DurableObject {
 	}
 
 	async webSocketMessage(ws, raw) {
+		if ((typeof raw === 'string' ? raw.length : raw.byteLength) > LIMITS.maxMessageBytes) return ws.send(JSON.stringify({ t: 'error', message: 'That change was too large to send (over 1 MB).' }));
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (msg.t === 'versions') return ws.send(JSON.stringify({ t: 'versions', versions: await this.listVersions() }));
 		if (msg.t === 'version') {
 			const uxf = await this.ctx.storage.get(versionKey('vu:', msg.at));
 			return ws.send(JSON.stringify({ t: 'version', at: msg.at, uxf: uxf || null }));
+		}
+		if (msg.t === 'ops') { // new elements beyond the limits are refused (the sender is told which, to take them back)
+			const limited = this.state.enforceLimits(msg);
+			if (limited.rejected.length) ws.send(JSON.stringify({ t: 'limit', reason: limited.reason, max: LIMITS.maxElementsPerDiagram, rejected: limited.rejected }));
+			msg = limited.msg;
 		}
 		const version = msg.t === 'checkpoint' ? this.state.versionNow('before a restore') : this.state.versionBefore(msg);
 		if (version) await this.saveVersion(version);
@@ -142,11 +216,11 @@ export class Room extends DurableObject {
 			for (const k of keys.slice(i, i + 128)) batch[k] = entries[k];
 			await this.ctx.storage.put(batch);
 		}
-		// diagram rooms belong to a project: keep its "last edited" time in the directory current
+		// diagram rooms belong to a project: keep its "last edited" time current
 		const projectId = this.name && this.name.includes('/') ? this.name.split('/')[0] : null;
 		if (keys.length && projectId && Date.now() - this.lastTouch > TOUCH_INTERVAL_MS) {
 			this.lastTouch = Date.now();
-			await directory(this.env).fetch('https://do/touch', { method: 'POST', body: JSON.stringify({ id: projectId }) });
+			await project(this.env, projectId).fetch('https://do/touch', { method: 'POST' });
 		}
 	}
 }
@@ -163,7 +237,17 @@ export class Project extends DurableObject {
 	}
 
 	async fetch(request) {
-		const path = new URL(request.url).pathname;
+		const url = new URL(request.url);
+		const path = url.pathname;
+		if (path === '/summary') return this.state ? json(this.state.summary()) : json({ error: 'not found' }, 404);
+		if (path === '/has') return this.state && this.state.hasDiagram(url.searchParams.get('diagram') || '') ? json({ ok: true }) : json({ error: 'not found' }, 404);
+		if (path === '/touch') {
+			if (this.state && !this.state.meta.deleted) {
+				this.state.meta.updatedAt = Date.now();
+				await this.save();
+			}
+			return json({ ok: true });
+		}
 		if (path === '/init') {
 			if (!this.state) {
 				const { id, name } = await request.json();
@@ -189,6 +273,7 @@ export class Project extends DurableObject {
 			broadcast(this.ctx, JSON.stringify(this.message()));
 			return json(this.state.view());
 		}
+		if (this.ctx.getWebSockets().length >= LIMITS.maxViewersPerProject) return refuseSocket('This project already has ' + LIMITS.maxViewersPerProject + ' people connected. Trying again shortly.', 'full', 1013);
 		const [client, server] = Object.values(new WebSocketPair());
 		this.ctx.acceptWebSocket(server);
 		const you = crypto.randomUUID().slice(0, 8);
@@ -199,7 +284,7 @@ export class Project extends DurableObject {
 
 	message(except) {
 		const exists = this.state && !this.state.meta.deleted;
-		return { t: 'project', project: exists ? this.state.view() : null, viewers: this.viewers(except) };
+		return { t: 'project', project: exists ? this.state.view() : null, deleted: !!(this.state && this.state.meta.deleted), viewers: this.viewers(except) };
 	}
 
 	viewers(except) {
@@ -210,6 +295,7 @@ export class Project extends DurableObject {
 	}
 
 	async webSocketMessage(ws, raw) {
+		if ((typeof raw === 'string' ? raw.length : raw.byteLength) > LIMITS.maxMessageBytes) return;
 		let msg;
 		try { msg = JSON.parse(raw); } catch { return; }
 		if (msg.t === 'viewing') {
@@ -240,27 +326,29 @@ export class Project extends DurableObject {
 
 	async save() {
 		await this.ctx.storage.put('meta', this.state.meta);
-		await directory(this.env).fetch('https://do/upsert', { method: 'POST', body: JSON.stringify(this.state.summary()) });
 	}
 }
 
-/* single instance: index of all projects for the landing page */
+/* single instance: how many projects each network created lately (keys are hashes, never the address itself).
+   Older versions also kept a list of all projects here ("p:" entries); nothing reads or serves it any more. */
 export class Directory extends DurableObject {
-	constructor(ctx, env) {
-		super(ctx, env);
-		ctx.blockConcurrencyWhile(async () => {
-			this.state = new DirectoryState(Array.from((await ctx.storage.list({ prefix: 'p:' })).values()));
-		});
+	async fetch(request) {
+		if (new URL(request.url).pathname !== '/quota') return json({ error: 'not found' }, 404);
+		const { key, limit, windowMs } = await request.json();
+		const now = Date.now();
+		const taken = takeQuota((await this.ctx.storage.get('q:' + key)) || [], now, limit, windowMs);
+		if (taken.ok) await this.ctx.storage.put('q:' + key, taken.stamps);
+		await this.sweep(now, windowMs);
+		return json({ ok: taken.ok, retryAt: taken.retryAt });
 	}
 
-	async fetch(request) {
-		const path = new URL(request.url).pathname;
-		if (path === '/list') return json(this.state.list());
-		if (path === '/deleted') return json(this.state.listDeleted());
-		const body = await request.json();
-		const entry = path === '/upsert' ? this.state.upsert(body) : path === '/touch' ? this.state.touch(body.id) : null;
-		if (entry) await this.ctx.storage.put('p:' + entry.id, entry);
-		return json({ ok: !!entry });
+	/* once a day: forget networks whose last project is older than the window */
+	async sweep(now, windowMs) {
+		if (now - ((await this.ctx.storage.get('swept')) || 0) < 24 * 3600 * 1000) return;
+		await this.ctx.storage.put('swept', now);
+		const expired = [];
+		for (const [k, stamps] of await this.ctx.storage.list({ prefix: 'q:' })) if (!stamps.some((t) => now - t < windowMs)) expired.push(k);
+		for (let i = 0; i < expired.length; i += 128) await this.ctx.storage.delete(expired.slice(i, i + 128));
 	}
 }
 

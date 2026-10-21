@@ -8,7 +8,7 @@ A fork of [UMLet](https://github.com/umlet/umlet) whose web version (UMLetino) s
 - reorder diagrams (drag a tab)
 - delete a diagram (×) and restore it later (Deleted menu)
 
-The tab bar also shows a coloured dot for each person viewing a diagram. Everything is public to whoever has the link; there are no accounts. The web build hides UMLetino's Dropbox and browser-storage (Save) menu items, because diagrams are saved to the server automatically.
+The tab bar also shows a coloured dot for each person viewing a diagram. There are no accounts: whoever has a project's link can edit it, so the link is the password (see [Hosting it for everyone](#hosting-it-for-everyone)). The web build hides UMLetino's Dropbox and browser-storage (Save) menu items, because diagrams are saved to the server automatically.
 
 **In each diagram**, several people can edit at once and see:
 - each other's cursors and selections
@@ -46,7 +46,7 @@ npm run deploy       # build dist/ and deploy; prints the https://umletino-colla
 
 What runs where:
 - **Static app** (`dist/`): Workers Static Assets. Requests for static files are free. `index.html` is the project list and `app.html` is the editor.
-- **Project** Durable Object, one per project: holds the diagram list, broadcasts changes and tracks who views which tab. **Directory** Durable Object, a single instance: the project list for the landing page.
+- **Project** Durable Object, one per project: holds the diagram list, broadcasts changes and tracks who views which tab. **Directory** Durable Object, a single instance: counts how many projects each network created lately (for the quota below).
 - **One Durable Object per diagram room** (`<projectId>/<diagramId>`) (`src/worker.js`): relays messages over hibernatable websockets, so idle rooms cost nothing. Room state is saved to the object's SQLite storage at most once a second, and immediately when the last person leaves. Rooms therefore survive restarts and deploys.
 - **Free plan limits:** 100k Durable Object requests/day, with incoming websocket messages counted 20:1, and 100k storage rows written/day. That is plenty for demos and small teams. On the free plan, going over a limit makes requests fail until the next day; it never charges you.
 
@@ -82,6 +82,21 @@ What runs where:
 | `collab-server/src/worker.js`, `wrangler.jsonc` | Cloudflare Worker + Durable Object |
 | `collab-server/server.js` | Node relay for local use/self-hosting (in-memory rooms) |
 
+## Hosting it for everyone
+
+With no accounts, a project's id is its only protection, so a public deployment has to keep ids private and keep one visitor from filling the server:
+
+- **No list of projects.** Nothing on the server lists projects. Each browser remembers the projects it opened or created (`localStorage`, `umletcollab.projects`) and the project list page asks the server about just those (`POST /api/projects/lookup`). A deleted project can be restored from its own link.
+- **Ids.** New projects get 96-bit random ids (older ones keep 40-bit ids so their links still work). A diagram room only exists for a diagram that its project has; made-up room names are refused, and a permanently deleted diagram cannot come back by reconnecting to it.
+- **Limits** (`src/limits.js`, enforced on the server, each with a message shown in the page):
+  - 5 new projects per network (IP address) per 30 days, counted over a rolling window. IPv6 visitors count per /64. Only a salted hash of the address is stored, for 30 days. The number can be changed with `MAX_PROJECTS_PER_IP` in `wrangler.jsonc`. Everyone behind one shared address (a campus or office network) shares that quota.
+  - 40 diagrams per project, plus at most 100 deleted ones waiting to be restored or deleted permanently.
+  - 1500 elements per diagram. Edits to existing elements always go through, so a full diagram can still be edited and emptied. New elements beyond the limit are refused, and the editor takes them out again and says so.
+  - 30 people per diagram, 100 per project (others see a message and retry by themselves), and 1 MB per websocket message.
+- **Captcha** (Cloudflare Turnstile, free): when creating a project, invisible unless the visitor needs to prove something. It switches on once both halves exist: create a widget in the Cloudflare dashboard (Turnstile, hostname = your domain), put its public site key in `TURNSTILE_SITE_KEY` in `wrangler.jsonc`, and store its secret with `npx wrangler secret put TURNSTILE_SECRET`. Optionally `npx wrangler secret put QUOTA_SALT` with any random text. Without the secret, project creation still works, with the quota only.
+- **Not done:** inactive projects are never deleted automatically (the free plan has 5 GB of Durable Object storage, and deleting people's work on a timer is a risk), there are no view-only links, and a visitor who knows a link can still edit and delete that project.
+- `node scripts/limits-check.js` checks all of this against a local `wrangler dev` (use Cloudflare's Turnstile test keys in a `.dev.vars` file). `node scripts/backup.js <baseUrl> <outFile> [projectId ...]` takes a read-only copy of projects by id.
+
 ## Load testing
 
 `node scripts/load-test.js <baseUrl> [diagrams] [clientsPerDiagram] [elements] [seconds]` (from `collab-server/`) simulates many clients dragging elements in many diagrams and reports relay latency (client 0 stamps a probe element, the others measure when it arrives) and whether fresh clients see the stored state. Run it against a local `npx wrangler dev --persist-to <folder outside OneDrive>` (real Durable Object behaviour, no Cloudflare quota used) or `node server.js`, never against the shared production instance. Local results (2026-10-03, one Windows PC also running other jobs): 20 diagrams x 3 clients x 50 elements: p50 6 ms, p95 about 40 ms; 40 diagrams x 3 clients: p50 11 ms, p95 89 ms; 20 diagrams x 8 clients (160 users): p95 57 ms. No errors, no dropped connections, stored state correct. One early run showed a 10 s stall that did not reproduce in five repeats.
@@ -89,8 +104,8 @@ What runs where:
 ## Known limitations
 
 - There is no undo/redo in UMLetino, so there is no per-user undo either.
-- There is no auth (by design for an internal tool): anyone with the URL can see every project and edit or delete it.
-- Deleting a diagram or project only hides it. Deleted diagrams can be restored from the **Deleted** menu in the tab bar, and deleted projects from **Recently deleted** on the project list. The Deleted menu also has a button to delete a diagram permanently, which erases its content and history from the server.
+- There is no auth: anyone with a project's link can see, edit and delete it, and the link is the only secret. Anyone who is given one can pass it on.
+- Deleting a diagram or project only hides it. Deleted diagrams can be restored from the **Deleted** menu in the tab bar, and deleted projects from **Recently deleted** on the project list, or from the project's own link. The Deleted menu also has a button to delete a diagram permanently, which erases its content and history from the server.
 - If two people change the same element's geometry at the same moment, one change wins; text is merged instead.
 - The Node relay keeps rooms in memory only (dropped 10 minutes after the last person leaves). The Cloudflare version persists them.
 

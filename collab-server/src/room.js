@@ -4,6 +4,7 @@
 // - elements: geometry/type records, merged per element with last-writer-wins (higher version, ties: lower nonce)
 // - y: a Yjs document (as one merged update) holding the text of every element, so concurrent typing merges
 import * as Y from 'yjs';
+import { LIMITS } from './limits.js';
 
 export function wins(op, cur) {
 	return !cur || op.version > cur.version || (op.version === cur.version && op.nonce < cur.nonce);
@@ -111,6 +112,32 @@ export class RoomState {
 	/* state sent to a client when it joins */
 	hello() {
 		return { elements: Array.from(this.elements.values()), y: this.y ? toBase64(this.y) : null };
+	}
+
+	/**
+	 * Keeps a diagram within LIMITS before an 'ops' message is applied. Changes to elements the diagram already has
+	 * are always accepted (so a diagram at its limit can still be edited and emptied); only new or revived elements
+	 * beyond the limit are refused. Returns {msg, rejected, reason}: msg without the refused ops, their ids, and why
+	 * ('elements': too many elements, 'records': too much remembered history).
+	 */
+	enforceLimits(msg) {
+		if (msg.t !== 'ops' || !Array.isArray(msg.ops)) return { msg, rejected: [], reason: null };
+		let live = this.liveCount();
+		let total = this.elements.size;
+		const keep = [], rejected = [];
+		let reason = null;
+		for (const op of msg.ops) {
+			if (!op || typeof op.id !== 'string') { keep.push(op); continue; } // not valid: applyOps drops it
+			const cur = this.elements.get(op.id);
+			if (!cur && op.deleted) continue; // deleting something this diagram never had: nothing to keep
+			const revives = !op.deleted && op.id !== '_diagram' && (!cur || cur.deleted);
+			if (!cur && total >= LIMITS.maxRecordsPerDiagram) { rejected.push(op.id); reason = reason || 'records'; continue; }
+			if (revives && live >= LIMITS.maxElementsPerDiagram) { rejected.push(op.id); reason = 'elements'; continue; }
+			keep.push(op);
+			if (!cur) total++;
+			if (revives && wins(op, cur)) live++;
+		}
+		return { msg: { ...msg, ops: keep }, rejected, reason };
 	}
 
 	/* returns the ops that won and must be relayed to the other clients */

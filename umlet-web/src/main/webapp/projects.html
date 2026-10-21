@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="vendor/shoelace/themes/light.css">
     <link rel="stylesheet" href="vendor/shoelace/themes/dark.css">
     <script src="vendor/shoelace/shoelace.js"></script>
+    <script src="projectclient.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--sl-color-neutral-50); color: var(--sl-color-neutral-900); font: var(--sl-font-size-medium)/1.5 var(--sl-font-sans); }
@@ -49,7 +50,7 @@
         <img src="umlet_logo64.png" alt="">
         <div>
             <h1>UMLet projects</h1>
-            <p>Shared with everyone who has the link. Each project holds several UML diagrams that you edit together.</p>
+            <p>Each project holds several UML diagrams that you edit together. Only people with a project’s link can open it. The projects you create or open on this device are listed below.</p>
         </div>
         <div class="spacer"></div>
         <sl-tooltip id="theme-tip" content="Dark mode"><sl-icon-button id="theme" name="moon" label="Dark mode"></sl-icon-button></sl-tooltip>
@@ -118,6 +119,16 @@
         });
         tip.appendChild(button);
         li.appendChild(tip);
+        if (!deleted) {
+            var forgetTip = document.createElement('sl-tooltip');
+            forgetTip.content = 'Remove from this list (the project is not deleted)';
+            var forget = document.createElement('sl-icon-button');
+            forget.name = 'x-lg';
+            forget.label = 'Remove ' + p.name + ' from this list';
+            forget.addEventListener('click', function () { umletProjects.forget(p.id); load(); });
+            forgetTip.appendChild(forget);
+            li.appendChild(forgetTip);
+        }
         return li;
     }
 
@@ -125,7 +136,7 @@
         list.innerHTML = '';
         count.textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
         if (!projects.length) {
-            list.appendChild(el('li', 'empty', 'No projects yet. Create the first one above.'));
+            list.appendChild(el('li', 'empty', 'No projects here yet. Create one above, or open a link that someone shared with you.'));
             return;
         }
         projects.forEach(function (p) { list.appendChild(row(p, false)); });
@@ -140,15 +151,28 @@
         projects.forEach(function (p) { deleted.appendChild(row(p, true)); });
     }
 
+    // there is no public list of projects: the page asks about the ones this browser has opened or created
     function load() {
-        fetch('api/projects', { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(render)
+        umletProjects.lookup()
+            .then(function (found) {
+                render(found.filter(function (p) { return !p.deleted; }));
+                renderDeleted(found.filter(function (p) { return p.deleted; }));
+            })
             .catch(function () { list.innerHTML = ''; list.appendChild(el('li', 'error', 'Couldn’t load projects. Try reloading the page.')); });
-        fetch('api/projects?deleted=1', { cache: 'no-store' })
-            .then(function (r) { return r.ok ? r.json() : []; })
-            .then(renderDeleted)
-            .catch(function () { /* the section just stays hidden */ });
+    }
+
+    function toast(message) {
+        var alert = document.createElement('sl-alert');
+        alert.variant = 'danger';
+        alert.closable = true;
+        alert.duration = Math.max(5000, message.length * 70);
+        var icon = document.createElement('sl-icon');
+        icon.slot = 'icon';
+        icon.name = 'exclamation-octagon';
+        alert.appendChild(icon);
+        alert.appendChild(document.createTextNode(message));
+        document.body.appendChild(alert);
+        alert.toast();
     }
 
     var creating = false;
@@ -157,10 +181,9 @@
         creating = true;
         var button = document.querySelector('#create sl-button');
         button.loading = true;
-        fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: document.getElementById('name').value }) })
-            .then(function (r) { return r.json(); })
+        umletProjects.create(document.getElementById('name').value)
             .then(function (p) { location.href = 'app.html?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
-            .catch(function () { creating = false; button.loading = false; alert('Couldn’t create the project. Try again.'); });
+            .catch(function (e) { creating = false; button.loading = false; toast(e.message); });
     }
     document.getElementById('create').addEventListener('submit', function (e) { e.preventDefault(); create(); });
     // Enter in the name field creates the project too

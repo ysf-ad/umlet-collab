@@ -50,6 +50,10 @@
 	// element drifts a grid step every time the diagram is opened. Only changes from this local look are edits.
 	var applied = new Map();
 
+	// The project bar (projectbar.js) fills these in: notice(text) shows a toast, blocked(text) covers the editor with a
+	// message while the diagram cannot be used (text = null removes it again).
+	var hooks = { notice: function () {}, blocked: function () {} };
+
 	// html.collab-loading until the room's diagram is shown (the project bar draws a loading overlay for it)
 	function setLoading(on) { document.documentElement.classList.toggle('collab-loading', on); }
 	setLoading(true);
@@ -402,6 +406,20 @@
 
 	var offline = false; // debugging aid: umletCollab.debug.setOffline(true) simulates a lost connection
 	var generation = 0;  // increases with every room switch; events of older sockets are ignored
+	var refused = false; // the server said this diagram does not exist: do not keep knocking
+	var retryDelay = 1000;
+
+	// the server refused some new elements (diagram at its size limit): take them out of the local diagram again
+	function onLimit(msg) {
+		var ids = msg.rejected || [];
+		ydoc.transact(function () {
+			ids.forEach(function (id) { known.delete(id); applied.delete(id); texts.delete(id); });
+		});
+		applyRecords(ids.map(function (id) { return { id: id, type: '', deleted: true }; }), false);
+		hooks.notice(msg.reason === 'records'
+			? 'This diagram has too much edit history to take new elements. Export it and import it into a new diagram.'
+			: 'This diagram is limited to ' + msg.max + ' elements, so ' + ids.length + (ids.length === 1 ? ' new element was' : ' new elements were') + ' not added.');
+	}
 
 	function connect() {
 		if (offline || !room) return;
@@ -412,6 +430,9 @@
 			if (gen !== generation) return;
 			var msg = JSON.parse(e.data);
 			if (msg.t === 'hello') {
+				refused = false;
+				retryDelay = 1000;
+				hooks.blocked(null);
 				me.id = msg.id;
 				serverState = new Map();
 				(msg.elements || []).forEach(function (r) { serverState.set(r.id, r); });
@@ -423,11 +444,23 @@
 			else if (msg.t === 'presence') onPresence(msg);
 			else if (msg.t === 'leave') removePeer(msg.from);
 			else if (msg.t === 'versions' || msg.t === 'version') answer(msg);
+			else if (msg.t === 'limit') onLimit(msg);
+			else if (msg.t === 'error') hooks.notice(msg.message);
+			else if (msg.t === 'rejected') { // no such diagram: nothing here can be saved, so the editor is covered instead of left editable
+				refused = true;
+				setLoading(false);
+				hooks.blocked(msg.message);
+			}
+			else if (msg.t === 'full') { // too many people in this diagram: try again in a while
+				retryDelay = 8000;
+				setLoading(false);
+				hooks.blocked(msg.message);
+			}
 		};
 		ws.onclose = function () {
 			if (gen !== generation) return;
 			synced = false;
-			if (!offline) setTimeout(function () { if (gen === generation) connect(); }, 1000);
+			if (!offline && !refused) setTimeout(function () { if (gen === generation) connect(); }, retryDelay);
 		};
 	}
 
@@ -451,6 +484,9 @@
 			try { window.umletCollabApply([{ id: '_diagram', type: '_diagram', pa: '' }], true); } finally { applying = false; }
 		}
 		room = newRoom;
+		refused = false;
+		retryDelay = 1000;
+		hooks.blocked(null);
 		setLoading(true);
 		connect();
 	}
@@ -477,6 +513,7 @@
 			store('umletcollab.name', me.name);
 			announcePresence(); // with the new name
 		},
+		hooks: hooks,
 		onReady: function () { ready = true; trySync(); },
 		onLocalChange: onLocalChange,
 		insertUxf: insertUxf,

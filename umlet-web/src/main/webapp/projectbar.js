@@ -150,7 +150,7 @@
 		toast.textContent = text;
 		toast.classList.add('visible');
 		clearTimeout(toastTimer);
-		toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 3500);
+		toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, Math.max(3500, text.length * 55));
 	}
 
 	insertMenuItem.addEventListener('click', function () { insertInput.value = ''; insertInput.click(); });
@@ -168,6 +168,8 @@
 	}
 
 	// ---- connection -----------------------------------------------------------------
+	var reconnectDelay = 1500;
+	var refusedForGood = false; // the server said this project link is not valid
 	function connect() {
 		var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		ws = new WebSocket(proto + '//' + location.host + '/project?id=' + encodeURIComponent(projectId));
@@ -175,8 +177,10 @@
 		ws.onmessage = function (e) {
 			var msg = JSON.parse(e.data);
 			if (msg.t === 'project') {
+				reconnectDelay = 1500;
+				showBlocked(null);
 				viewers = msg.viewers || [];
-				onProject(msg.project);
+				onProject(msg.project, msg.deleted);
 				avoidSameColor();
 				if (msg.you) { // first message of a (re)connection: tell the others where we are
 					you = msg.you;
@@ -194,23 +198,27 @@
 				pendingSwitch = msg.id;
 				if (project) onProject(project);
 			}
-			else if (msg.t === 'error') showToast(msg.message);
-			else if (msg.t === 'deleted') onProject(null);
+			else if (msg.t === 'error') { pendingAdd = null; showToast(msg.message); }
+			else if (msg.t === 'deleted') onProject(null, true);
+			else if (msg.t === 'rejected') { refusedForGood = true; showMissing(msg.message); }
+			else if (msg.t === 'full') { reconnectDelay = 8000; showBlocked(msg.message); }
 		};
 		ws.onclose = function () {
+			if (refusedForGood) return;
 			statusEl.textContent = 'Reconnecting…';
-			setTimeout(connect, 1500);
+			setTimeout(connect, reconnectDelay);
 		};
 	}
 
-	function onProject(p) {
+	function onProject(p, wasDeleted) {
 		if (!p) {
 			project = null;
-			showMissing();
+			showMissing(null, wasDeleted);
 			return;
 		}
 		var previous = project;
 		project = p;
+		umletProjects.remember(p.id, p.name); // the project list page shows the projects this browser has opened
 		projectNameEl.textContent = p.name;
 		document.body.classList.remove('pb-missing'); // the project may have been restored
 		var missing = document.getElementById('pb-missing');
@@ -240,11 +248,37 @@
 		}
 	}
 
-	function showMissing() {
+	// covers the editor with a message while the diagram can't be used (it doesn't exist, or it is full); null removes it again
+	function showBlocked(message) {
+		var box = document.getElementById('pb-blocked');
+		if (!message) {
+			if (box) box.remove();
+			return;
+		}
+		if (!box) box = document.body.appendChild(el('div', { id: 'pb-blocked', role: 'alert' }));
+		box.innerHTML = '';
+		box.appendChild(el('p', { text: message }));
+		box.appendChild(el('sl-button', { variant: 'primary', href: './' }, [document.createTextNode('Go to all projects')]));
+	}
+	umletCollab.hooks.notice = showToast;
+	umletCollab.hooks.blocked = showBlocked;
+
+	// a deleted project keeps all its diagrams: anyone with its link can bring it back
+	function showMissing(message, restorable) {
 		document.body.classList.add('pb-missing');
 		var box = document.getElementById('pb-missing') || document.body.appendChild(el('div', { id: 'pb-missing' }));
 		box.innerHTML = '';
-		box.appendChild(el('p', { text: 'This project doesn’t exist or was deleted.' }));
+		box.appendChild(el('p', { text: message || (restorable ? 'This project was deleted. Its diagrams are still there.' : 'This project doesn’t exist.') }));
+		if (restorable) {
+			var restore = el('sl-button', { variant: 'primary' }, [document.createTextNode('Restore project')]);
+			restore.addEventListener('click', function () {
+				restore.loading = true;
+				fetch('api/projects/' + encodeURIComponent(projectId) + '/restore', { method: 'POST' }).then(function (r) {
+					if (!r.ok) throw new Error(String(r.status));
+				}).catch(function () { restore.loading = false; showToast('Couldn’t restore the project. Try again.'); });
+			});
+			box.appendChild(restore);
+		}
 		box.appendChild(el('sl-button', { variant: 'primary', href: './' }, [document.createTextNode('Go to all projects')]));
 	}
 
@@ -526,8 +560,8 @@
 		projectMenu.appendChild(el('sl-menu-item', { value: '__new' }, [icon('plus-lg', 'prefix'), document.createTextNode('New project…')]));
 		if (!standalone) projectMenu.appendChild(el('sl-menu-item', { value: '__rename' }, [icon('pencil', 'prefix'), document.createTextNode('Rename this project…')]));
 		projectMenu.appendChild(el('sl-menu-item', { value: '__all' }, [icon('grid', 'prefix'), document.createTextNode('All projects')]));
-		fetch('api/projects', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (list) {
-			var items = list.map(function (p) {
+		umletProjects.lookup().then(function (list) {
+			var items = list.filter(function (p) { return !p.deleted; }).map(function (p) {
 				var isCurrent = p.id === projectId;
 				return el('sl-menu-item', { value: p.id }, [
 					icon(isCurrent ? 'check2' : 'folder2', 'prefix'),
@@ -554,10 +588,10 @@
 	function createProject() {
 		var name = prompt('Name of the new project:', '');
 		if (name === null) return;
-		fetch('api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name }) })
-			.then(function (r) { return r.json(); })
+		showToast('Creating the project…');
+		umletProjects.create(name)
 			.then(function (p) { location.href = 'app?project=' + encodeURIComponent(p.id) + '&diagram=' + encodeURIComponent(p.diagrams[0].id); })
-			.catch(function () { showToast('Couldn’t create the project. Try again.'); });
+			.catch(function (e) { showToast(e.message); });
 	}
 	function renameProject() {
 		if (!project) return;
@@ -641,12 +675,12 @@
 		'.pb-input{font:inherit;font-weight:var(--sl-font-weight-normal);width:150px;padding:2px 6px;border:1px solid var(--sl-color-primary-600);border-radius:var(--sl-border-radius-small);background:var(--sl-color-neutral-0);color:var(--sl-color-neutral-900);outline:none;box-shadow:0 0 0 2px var(--sl-color-primary-100)}',
 		'body.pb-standalone #projectbar .pb-tabs,body.pb-standalone #projectbar .pb-diagrams,body.pb-standalone #projectbar .pb-add,body.pb-standalone #projectbar .pb-trash{display:none}',
 		'body.pb-standalone #projectbar .pb-project::part(label){font-weight:var(--sl-font-weight-normal);color:var(--sl-color-neutral-600)}',
-		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 12) + 'px;transform:translateX(-50%);background:var(--sl-color-neutral-800);color:var(--sl-color-neutral-0);padding:var(--sl-spacing-x-small) var(--sl-spacing-medium);border-radius:var(--sl-border-radius-medium);font:var(--sl-font-size-small) var(--sl-font-sans);box-shadow:var(--sl-shadow-large);opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001}',
+		'#pb-toast{position:fixed;left:50%;top:' + (BAR_HEIGHT + 12) + 'px;transform:translateX(-50%);background:var(--sl-color-neutral-800);color:var(--sl-color-neutral-0);padding:var(--sl-spacing-x-small) var(--sl-spacing-medium);border-radius:var(--sl-border-radius-medium);font:var(--sl-font-size-small) var(--sl-font-sans);box-shadow:var(--sl-shadow-large);opacity:0;pointer-events:none;transition:opacity .2s;z-index:1001;max-width:min(90vw,560px);text-align:center}',
 		'#pb-toast.visible{opacity:1}',
 		'#pb-loading{display:none;position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;align-items:center;justify-content:center;gap:var(--sl-spacing-small);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-600);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:998}',
 		'html.collab-loading #pb-loading{display:flex}',
 		'#pb-loading sl-spinner{font-size:1.5rem}',
-		'#pb-missing{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sl-spacing-medium);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-700);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:999}',
+		'#pb-missing,#pb-blocked{position:fixed;inset:' + BAR_HEIGHT + 'px 0 0 0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sl-spacing-medium);background:var(--sl-color-neutral-50);color:var(--sl-color-neutral-700);font:var(--sl-font-size-medium) var(--sl-font-sans);z-index:999}',
 		'body.pb-missing #projectbar .pb-add,body.pb-missing #projectbar .pb-share{display:none}'
 	].join('\n');
 	document.head.appendChild(style);

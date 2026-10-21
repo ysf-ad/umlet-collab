@@ -7,6 +7,11 @@
 	// served on the custom domain (Cloudflare creates the DNS record and certificate); workers.dev keeps working too
 	"routes": [{ "pattern": "umlet.yousifaldakoki.com", "custom_domain": true }],
 	"workers_dev": true,
+	// MAX_PROJECTS_PER_IP: new projects one network (IP address) may create per 30 days.
+	// TURNSTILE_SITE_KEY: the public key of a Cloudflare Turnstile widget (dashboard > Turnstile). The captcha only turns on once
+	// its secret exists too: npx wrangler secret put TURNSTILE_SECRET. Optional: npx wrangler secret put QUOTA_SALT (random text
+	// mixed into the hashed network addresses of the quota).
+	"vars": { "MAX_PROJECTS_PER_IP": "5", "TURNSTILE_SITE_KEY": "" },
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS"

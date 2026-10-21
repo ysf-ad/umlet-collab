@@ -5,7 +5,8 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { ProjectState, DirectoryState } from '../src/project.js';
+import { ProjectState } from '../src/project.js';
+import { LIMITS } from '../src/limits.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 19080 + Math.floor(Math.random() * 1000);
@@ -49,16 +50,6 @@ test('the last diagram cannot be removed', () => {
 	assert.strictEqual(reply.t, 'error');
 });
 
-test('directory lists projects by last edit and hides deleted ones', () => {
-	const d = new DirectoryState();
-	d.upsert({ id: 'a', name: 'A', updatedAt: 1 });
-	d.upsert({ id: 'b', name: 'B', updatedAt: 2 });
-	d.touch('a', 3);
-	assert.deepStrictEqual(d.list().map((p) => p.id), ['a', 'b']);
-	d.upsert({ id: 'b', deleted: true });
-	assert.deepStrictEqual(d.list().map((p) => p.id), ['a']);
-});
-
 function connect(projectId) {
 	return new Promise((resolve) => {
 		const ws = new WebSocket(`ws://localhost:${PORT}/project?id=${projectId}`);
@@ -70,7 +61,9 @@ function connect(projectId) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const lastProject = (c) => c.inbox.filter((m) => m.t === 'project').pop().project;
 
-test('project changes reach everyone in the project and the directory', async () => {
+const lookup = async (ids) => (await fetch(`${BASE}/api/projects/lookup`, { method: 'POST', body: JSON.stringify({ ids }) })).json();
+
+test('project changes reach everyone in the project', async () => {
 	const created = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'Shop' }) })).json();
 	const a = await connect(created.id), b = await connect(created.id);
 	a.send({ t: 'viewing', diagram: created.diagrams[0].id, name: 'Ann', color: '#f00' });
@@ -80,8 +73,7 @@ test('project changes reach everyone in the project and the directory', async ()
 	assert.ok(!b.inbox.some((m) => m.t === 'added'), 'only the creator gets the reply');
 	assert.deepStrictEqual(lastProject(b).diagrams.map((d) => d.name), ['Diagram 1', 'Orders']);
 	assert.ok(b.inbox.some((m) => m.t === 'viewers' && m.viewers.some((v) => v.name === 'Ann')));
-	const listed = await (await fetch(`${BASE}/api/projects`)).json();
-	assert.strictEqual(listed.find((p) => p.id === created.id).diagrams, 2);
+	assert.strictEqual((await lookup([created.id]))[0].diagrams, 2);
 	[a, b].forEach((c) => c.ws.close());
 });
 
@@ -91,11 +83,17 @@ test('deleted and unknown projects are reported as missing', async () => {
 	await fetch(`${BASE}/api/projects/${created.id}`, { method: 'DELETE' });
 	await sleep(50);
 	assert.ok(a.inbox.some((m) => m.t === 'deleted'));
-	const listed = await (await fetch(`${BASE}/api/projects`)).json();
-	assert.ok(!listed.some((p) => p.id === created.id));
+	const afterwards = await connect(created.id);
+	await sleep(50);
+	const m = afterwards.inbox.find((x) => x.t === 'project');
+	assert.strictEqual(m.project, null);
+	assert.strictEqual(m.deleted, true, 'a deleted project says so, so the page can offer to restore it');
+	afterwards.ws.close();
+	assert.strictEqual((await lookup([created.id]))[0].deleted, true);
 	const unknown = await connect('doesnotexist');
 	await sleep(50);
 	assert.strictEqual(lastProject(unknown), null);
+	assert.strictEqual(unknown.inbox.find((x) => x.t === 'project').deleted, false, 'an unknown project is not "deleted"');
 	[a, unknown].forEach((c) => c.ws.close());
 });
 
@@ -112,14 +110,73 @@ test('deleted diagrams are listed in trash and can be restored', () => {
 	assert.deepStrictEqual(p.view().trash, []);
 });
 
-test('deleted projects are listed separately and can be restored', async () => {
+test('deleted projects stay reachable by id and can be restored', async () => {
 	const created = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'Old' }) })).json();
 	await fetch(`${BASE}/api/projects/${created.id}`, { method: 'DELETE' });
-	let deleted = await (await fetch(`${BASE}/api/projects?deleted=1`)).json();
-	assert.ok(deleted.some((p) => p.id === created.id && p.deletedAt > 0));
+	let [found] = await lookup([created.id]);
+	assert.ok(found.deleted && found.deletedAt > 0);
 	await fetch(`${BASE}/api/projects/${created.id}/restore`, { method: 'POST' });
-	deleted = await (await fetch(`${BASE}/api/projects?deleted=1`)).json();
-	const listed = await (await fetch(`${BASE}/api/projects`)).json();
-	assert.ok(!deleted.some((p) => p.id === created.id));
-	assert.ok(listed.some((p) => p.id === created.id));
+	[found] = await lookup([created.id]);
+	assert.ok(!found.deleted);
+});
+
+test('there is no public list of projects; lookup only answers for ids it is given', async () => {
+	assert.strictEqual((await fetch(`${BASE}/api/projects`)).status, 404);
+	assert.strictEqual((await fetch(`${BASE}/api/projects?deleted=1`)).status, 404);
+	const a = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'A' }) })).json();
+	await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'B' }) })).json();
+	assert.strictEqual(a.id.length, 24, 'new project ids are long');
+	const found = await lookup([a.id, 'nosuchproject', '../x', 5, null]);
+	assert.deepStrictEqual(found.map((p) => p.name), ['A']);
+	assert.deepStrictEqual(await lookup('not a list'), []);
+});
+
+test('a project has at most 40 diagrams, restoring respects that too, and errors say why', () => {
+	const p = ProjectState.create('p1', 'P');
+	for (let i = 1; i < LIMITS.maxDiagramsPerProject; i++) assert.ok(p.handle({ t: 'add' }).changed);
+	assert.strictEqual(names(p).length, 40);
+	const full = p.handle({ t: 'add' });
+	assert.strictEqual(full.changed, false);
+	assert.strictEqual(full.reply.t, 'error');
+	assert.match(full.reply.message, /at most 40 diagrams/);
+	assert.strictEqual(names(p).length, 40, 'nothing was added');
+	// make room, delete one, fill the space again: the deleted one cannot come back over the limit
+	const victim = p.view().diagrams[5].id;
+	p.handle({ t: 'remove', id: victim });
+	p.handle({ t: 'add' });
+	const restore = p.handle({ t: 'restore', id: victim });
+	assert.strictEqual(restore.changed, false);
+	assert.match(restore.reply.message, /already has 40 diagrams/);
+	assert.strictEqual(p.view().trash.length, 1, 'the deleted diagram is still there');
+});
+
+test('the pile of deleted diagrams is bounded, and permanently deleting makes room', () => {
+	const p = ProjectState.create('p1', 'P');
+	for (let i = 0; i < LIMITS.maxDeletedPerProject; i++) {
+		const { reply } = p.handle({ t: 'add' });
+		p.handle({ t: 'remove', id: reply.id });
+	}
+	const blocked = p.handle({ t: 'add' });
+	assert.strictEqual(blocked.changed, false);
+	assert.match(blocked.reply.message, /deleted diagrams/);
+	const purged = p.handle({ t: 'purge', id: p.view().trash[0].id });
+	assert.ok(purged.purged);
+	assert.ok(p.handle({ t: 'add' }).changed);
+});
+
+test('a diagram room needs an existing project and diagram', async () => {
+	const created = await (await fetch(`${BASE}/api/projects`, { method: 'POST', body: '{}' })).json();
+	const open = (room) => new Promise((resolve) => {
+		const ws = new WebSocket(`ws://localhost:${PORT}/collab?room=${encodeURIComponent(room)}`);
+		const inbox = [];
+		ws.on('message', (m) => { inbox.push(JSON.parse(m)); });
+		ws.on('close', () => resolve(inbox));
+		setTimeout(() => { ws.close(); }, 300);
+	});
+	const good = await open(`${created.id}/${created.diagrams[0].id}`);
+	assert.strictEqual(good[0].t, 'hello');
+	for (const bad of [`${created.id}/nosuchdiagram`, `nosuchproject1/${created.diagrams[0].id}`, `${created.id}/a/b`]) {
+		const inbox = await open(bad);
+		assert.strictEqual(inbox[0].t, 'rejected', bad);
+	}
 });

@@ -2,7 +2,7 @@
 
 A fork of [UMLet](https://github.com/umlet/umlet) whose web version (UMLetino) supports real-time collaboration.
 
-**Projects.** The landing page lists every project. A project holds several diagrams, shown as tabs above the editor. Anyone can:
+**Projects.** The landing page lists the projects you have opened on this device. A project holds several diagrams, shown as tabs above the editor. Anyone can:
 - add a diagram (+)
 - rename a diagram or the project (double-click)
 - reorder diagrams (drag a tab)
